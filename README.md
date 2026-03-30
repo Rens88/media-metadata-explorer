@@ -65,6 +65,7 @@ This project is:
 
 * Python 3.11+
 * ExifTool available on `PATH`
+* Pillow (installed via project dependencies) for thumbnail generation
 
 Install ExifTool:
 
@@ -126,6 +127,7 @@ The report command prints:
 - latest scan summary
 - changed/new/missing counts
 - failed files list
+- thumbnail status counts and failed thumbnail list
 - non-null coverage by column
 
 Optional flags:
@@ -144,6 +146,22 @@ python -m photo_archive.cli report \
 python -m photo_archive.cli scan /path/to/root \
   --extension .jpg --extension .jpeg --extension .png
 ```
+
+### Generate thumbnails (Phase 2 start)
+
+```bash
+python -m photo_archive.cli thumbs \
+  --db-path data/db/photo_archive.duckdb \
+  --out-dir data/thumbnails \
+  --max-size 512
+```
+
+Thumbnail generation is incremental:
+
+- always generates for files marked `new` or `changed`
+- regenerates if a thumbnail row/file is missing or previous status was failed
+- skips unchanged files with an existing successful thumbnail
+- cleans stale thumbnail rows/files for media now marked missing
 
 ## Tiny Streamlit Explorer
 
@@ -165,6 +183,12 @@ What it shows:
 - non-null count and non-null percentage per field
 - least-populated fields
 - sample rows for quick inspection
+- thumbnail status counts and a live gallery preview (when `thumbnails` exists)
+- filterable media table (state/status/extension/text) joined with thumbnails
+- date/folder/device/GPS filters for focused local exploration
+- pagination controls and sortable filtered results for large collections
+- filter-synced timeline chart (day/month/year buckets with line/bar toggle)
+- filtered gallery preview from current query results
 
 ## Incremental Indexing Notes
 
@@ -194,7 +218,7 @@ Raw metadata is preserved as JSON to allow future enrichment without reprocessin
 * ExifTool (metadata extraction)
 * ffprobe (video metadata, future phase)
 * Pandas / Polars (data processing)
-* OpenCV (thumbnails, future phase)
+* Pillow (thumbnail generation)
 
 ---
 

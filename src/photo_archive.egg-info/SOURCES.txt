@@ -4,12 +4,15 @@ src/photo_archive/__init__.py
 src/photo_archive/cli.py
 src/photo_archive/config.py
 src/photo_archive/database.py
+src/photo_archive/incremental.py
 src/photo_archive/models.py
 src/photo_archive/normalize.py
 src/photo_archive/pipeline.py
+src/photo_archive/progress.py
 src/photo_archive/reporting.py
 src/photo_archive/scanner.py
 src/photo_archive/streamlit_explorer.py
+src/photo_archive/thumbnail_pipeline.py
 src/photo_archive.egg-info/PKG-INFO
 src/photo_archive.egg-info/SOURCES.txt
 src/photo_archive.egg-info/dependency_links.txt
@@ -20,4 +23,7 @@ src/photo_archive/extractors/__init__.py
 src/photo_archive/extractors/exiftool_extractor.py
 src/photo_archive/extractors/filename_parser.py
 tests/test_filename_parser.py
+tests/test_incremental.py
 tests/test_normalize.py
+tests/test_reporting.py
+tests/test_thumbnail_pipeline.py

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import astuple
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -11,13 +11,18 @@ from photo_archive.models import (
     ColumnCoverageRecord,
     ExistingFileIndexRecord,
     ExtensionCountRecord,
+    FailedThumbnailRecord,
     FailedFileRecord,
     NormalizedRecord,
     ScanHistoryRecord,
+    ThumbnailStatusCountRecord,
+    ThumbnailRecord,
+    ThumbnailSourceRecord,
 )
 
 TABLE_NAME = "file_metadata"
 SCANS_TABLE_NAME = "scans"
+THUMBNAILS_TABLE_NAME = "thumbnails"
 
 CREATE_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
@@ -137,11 +142,44 @@ INSERT INTO {SCANS_TABLE_NAME} (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
+CREATE_THUMBNAILS_TABLE_SQL = f"""
+CREATE TABLE IF NOT EXISTS {THUMBNAILS_TABLE_NAME} (
+    file_id VARCHAR PRIMARY KEY,
+    thumb_path VARCHAR,
+    width INTEGER,
+    height INTEGER,
+    status VARCHAR NOT NULL,
+    error VARCHAR,
+    generated_at TIMESTAMP NOT NULL
+)
+"""
+
+INSERT_THUMBNAIL_SQL = f"""
+INSERT OR REPLACE INTO {THUMBNAILS_TABLE_NAME} (
+    file_id,
+    thumb_path,
+    width,
+    height,
+    status,
+    error,
+    generated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+"""
+
 FILE_METADATA_MIGRATIONS = [
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS scan_id VARCHAR",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS file_state VARCHAR",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP",
+]
+
+THUMBNAILS_TABLE_MIGRATIONS = [
+    f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS thumb_path VARCHAR",
+    f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS width INTEGER",
+    f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS height INTEGER",
+    f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS status VARCHAR",
+    f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS error VARCHAR",
+    f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS generated_at TIMESTAMP",
 ]
 
 
@@ -165,6 +203,17 @@ class DuckDBStore:
                 """
             )
             conn.execute(CREATE_SCANS_TABLE_SQL)
+            conn.execute(CREATE_THUMBNAILS_TABLE_SQL)
+            for migration_sql in THUMBNAILS_TABLE_MIGRATIONS:
+                conn.execute(migration_sql)
+            conn.execute(
+                f"""
+                UPDATE {THUMBNAILS_TABLE_NAME}
+                SET
+                    status = COALESCE(status, 'unknown'),
+                    generated_at = COALESCE(generated_at, NOW())
+                """
+            )
 
     def upsert_records(self, records: list[NormalizedRecord]) -> None:
         if not records:
@@ -253,6 +302,144 @@ class DuckDBStore:
                 camera_model=row[14],
             )
         return output
+
+    def load_thumbnail_sources(self) -> list[ThumbnailSourceRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        path,
+                        file_state,
+                        is_supported,
+                        extract_status
+                    FROM {TABLE_NAME}
+                    WHERE COALESCE(file_state, '') <> 'missing'
+                    ORDER BY path
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        return [
+            ThumbnailSourceRecord(
+                file_id=row[0],
+                path=row[1],
+                file_state=row[2],
+                is_supported=bool(row[3]),
+                extract_status=row[4],
+            )
+            for row in rows
+        ]
+
+    def load_thumbnails_by_file_id(self) -> dict[str, ThumbnailRecord]:
+        if not self.db_path.exists():
+            return {}
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        thumb_path,
+                        width,
+                        height,
+                        status,
+                        error,
+                        generated_at
+                    FROM {THUMBNAILS_TABLE_NAME}
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return {}
+
+        records: dict[str, ThumbnailRecord] = {}
+        for row in rows:
+            generated_at = _coerce_datetime(row[6]) or datetime.now(timezone.utc)
+            records[row[0]] = ThumbnailRecord(
+                file_id=row[0],
+                thumb_path=row[1],
+                width=int(row[2]) if row[2] is not None else None,
+                height=int(row[3]) if row[3] is not None else None,
+                status=row[4] or "unknown",
+                error=row[5],
+                generated_at=generated_at,
+            )
+        return records
+
+    def load_stale_thumbnails(self) -> list[ThumbnailRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        t.file_id,
+                        t.thumb_path,
+                        t.width,
+                        t.height,
+                        t.status,
+                        t.error,
+                        t.generated_at
+                    FROM {THUMBNAILS_TABLE_NAME} AS t
+                    LEFT JOIN {TABLE_NAME} AS f
+                      ON f.file_id = t.file_id
+                     AND COALESCE(f.file_state, '') <> 'missing'
+                    WHERE f.file_id IS NULL
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        stale: list[ThumbnailRecord] = []
+        for row in rows:
+            stale.append(
+                ThumbnailRecord(
+                    file_id=row[0],
+                    thumb_path=row[1],
+                    width=int(row[2]) if row[2] is not None else None,
+                    height=int(row[3]) if row[3] is not None else None,
+                    status=row[4] or "unknown",
+                    error=row[5],
+                    generated_at=_coerce_datetime(row[6]) or datetime.now(timezone.utc),
+                )
+            )
+        return stale
+
+    def delete_thumbnails_by_file_ids(self, file_ids: list[str]) -> int:
+        if not file_ids:
+            return 0
+        id_rows = [(file_id,) for file_id in file_ids]
+        with duckdb.connect(str(self.db_path)) as conn:
+            conn.execute("CREATE TEMP TABLE _thumb_delete_ids(file_id VARCHAR)")
+            conn.executemany("INSERT INTO _thumb_delete_ids VALUES (?)", id_rows)
+            delete_count = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {THUMBNAILS_TABLE_NAME} AS t
+                    INNER JOIN _thumb_delete_ids AS d
+                      ON d.file_id = t.file_id
+                    """
+                ).fetchone()[0]
+            )
+            conn.execute(
+                f"""
+                DELETE FROM {THUMBNAILS_TABLE_NAME}
+                WHERE file_id IN (SELECT file_id FROM _thumb_delete_ids)
+                """
+            )
+        return delete_count
+
+    def upsert_thumbnail_records(self, records: list[ThumbnailRecord]) -> None:
+        if not records:
+            return
+        with duckdb.connect(str(self.db_path)) as conn:
+            conn.executemany(INSERT_THUMBNAIL_SQL, [astuple(record) for record in records])
 
     def mark_missing_files(
         self,
@@ -508,6 +695,61 @@ class DuckDBStore:
 
         return [
             ExtensionCountRecord(extension=row[0], count=int(row[1]))
+            for row in rows
+        ]
+
+    def get_thumbnail_status_counts(self) -> list[ThumbnailStatusCountRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        COALESCE(NULLIF(status, ''), '[unknown]') AS status_label,
+                        COUNT(*) AS row_count
+                    FROM {THUMBNAILS_TABLE_NAME}
+                    GROUP BY status_label
+                    ORDER BY row_count DESC, status_label ASC
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        return [
+            ThumbnailStatusCountRecord(status=row[0], count=int(row[1]))
+            for row in rows
+        ]
+
+    def get_failed_thumbnails(self, limit: int = 50) -> list[FailedThumbnailRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        thumb_path,
+                        status,
+                        error
+                    FROM {THUMBNAILS_TABLE_NAME}
+                    WHERE status = 'failed'
+                    ORDER BY generated_at DESC, file_id ASC
+                    LIMIT ?
+                    """,
+                    [int(limit)],
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        return [
+            FailedThumbnailRecord(
+                file_id=row[0],
+                thumb_path=row[1],
+                status=row[2] or "failed",
+                error=row[3],
+            )
             for row in rows
         ]
 

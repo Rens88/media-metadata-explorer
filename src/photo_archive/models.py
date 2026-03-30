@@ -133,3 +133,45 @@ class ColumnCoverageRecord:
 class ExtensionCountRecord:
     extension: str
     count: int
+
+
+@dataclass(slots=True)
+class ThumbnailStatusCountRecord:
+    status: str
+    count: int
+
+
+@dataclass(slots=True)
+class FailedThumbnailRecord:
+    file_id: str
+    thumb_path: str | None
+    status: str
+    error: str | None
+
+
+@dataclass(slots=True)
+class ThumbnailSourceRecord:
+    file_id: str
+    path: str
+    file_state: str | None
+    is_supported: bool
+    extract_status: str | None
+
+
+@dataclass(slots=True)
+class ThumbnailRecord:
+    file_id: str
+    thumb_path: str | None
+    width: int | None
+    height: int | None
+    status: str
+    error: str | None
+    generated_at: datetime
+
+
+@dataclass(slots=True)
+class ThumbnailJob:
+    file_id: str
+    source_path: str
+    thumb_path: str
+    trigger: str

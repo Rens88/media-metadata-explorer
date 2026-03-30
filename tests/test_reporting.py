@@ -3,9 +3,11 @@ from datetime import datetime, timezone
 from photo_archive.models import (
     ColumnCoverageRecord,
     ExtensionCountRecord,
+    FailedThumbnailRecord,
     FailedFileRecord,
     NormalizedRecord,
     ScanHistoryRecord,
+    ThumbnailStatusCountRecord,
 )
 from photo_archive.reporting import build_run_summary, format_cli_report, format_run_summary
 
@@ -113,6 +115,18 @@ def test_format_cli_report_sections() -> None:
         ExtensionCountRecord(extension=".mp4", count=8),
         ExtensionCountRecord(extension=".mov", count=2),
     ]
+    thumbnail_statuses = [
+        ThumbnailStatusCountRecord(status="success", count=120),
+        ThumbnailStatusCountRecord(status="failed", count=4),
+    ]
+    failed_thumbnails = [
+        FailedThumbnailRecord(
+            file_id="file-1",
+            thumb_path="/thumbs/file-1.jpg",
+            status="failed",
+            error="corrupt_image",
+        )
+    ]
 
     text = format_cli_report(
         scan=scan,
@@ -121,10 +135,16 @@ def test_format_cli_report_sections() -> None:
         coverage_rows=coverage_rows,
         coverage_total_rows=90,
         failed_limit=50,
+        thumbnail_statuses=thumbnail_statuses,
+        failed_thumbnails=failed_thumbnails,
     )
     assert "Latest scan summary" in text
     assert "unsupported_files: 10" in text
     assert ".mp4: 8" in text
     assert "Change counts" in text
     assert "Failed files (up to 50)" in text
+    assert "Thumbnail stats" in text
+    assert "total_rows: 124" in text
+    assert "Failed thumbnails (up to 50)" in text
+    assert "corrupt_image" in text
     assert "camera_model: 70/90" in text

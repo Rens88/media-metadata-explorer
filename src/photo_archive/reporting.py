@@ -7,9 +7,11 @@ from typing import Any, Sequence
 from photo_archive.models import (
     ColumnCoverageRecord,
     ExtensionCountRecord,
+    FailedThumbnailRecord,
     FailedFileRecord,
     NormalizedRecord,
     ScanHistoryRecord,
+    ThumbnailStatusCountRecord,
 )
 
 
@@ -188,7 +190,11 @@ def format_cli_report(
     coverage_total_rows: int,
     *,
     failed_limit: int,
+    thumbnail_statuses: list[ThumbnailStatusCountRecord] | None = None,
+    failed_thumbnails: list[FailedThumbnailRecord] | None = None,
 ) -> str:
+    thumbnail_statuses = thumbnail_statuses or []
+    failed_thumbnails = failed_thumbnails or []
     lines: list[str] = []
     lines.append("Latest scan summary")
     lines.append(f"  scan_id: {scan.scan_id}")
@@ -230,6 +236,26 @@ def format_cli_report(
         for item in failed_files:
             error_text = item.extract_error or "unknown_error"
             lines.append(f"  [{item.extract_status}] {item.path} | {error_text}")
+    lines.append("")
+
+    lines.append("Thumbnail stats")
+    if not thumbnail_statuses:
+        lines.append("  no thumbnail rows")
+    else:
+        thumbnail_total = sum(item.count for item in thumbnail_statuses)
+        lines.append(f"  total_rows: {thumbnail_total}")
+        for item in thumbnail_statuses:
+            lines.append(f"  {item.status}: {item.count}")
+    lines.append("")
+
+    lines.append(f"Failed thumbnails (up to {failed_limit})")
+    if not failed_thumbnails:
+        lines.append("  none")
+    else:
+        for item in failed_thumbnails:
+            error_text = item.error or "unknown_error"
+            path_text = item.thumb_path or "[no_thumb_path]"
+            lines.append(f"  [{item.status}] {item.file_id} | {path_text} | {error_text}")
     lines.append("")
 
     lines.append(f"Non-null coverage by column (rows={coverage_total_rows})")

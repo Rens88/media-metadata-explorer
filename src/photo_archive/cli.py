@@ -8,6 +8,7 @@ from photo_archive.database import DuckDBStore
 from photo_archive.pipeline import run_pipeline
 from photo_archive.progress import ProgressPrinter
 from photo_archive.reporting import format_cli_report, format_run_summary
+from photo_archive.thumbnail_pipeline import format_thumbnail_summary, run_thumbnail_pipeline
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -90,6 +91,40 @@ def build_parser() -> argparse.ArgumentParser:
         default="asc",
         help="Sort non-null coverage by percentage (asc=least populated first)",
     )
+
+    thumbs_parser = subparsers.add_parser(
+        "thumbs",
+        help="Generate thumbnails from indexed files",
+    )
+    thumbs_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=Path("data/db/photo_archive.duckdb"),
+        help="DuckDB file path",
+    )
+    thumbs_parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("data/thumbnails"),
+        help="Thumbnail output directory",
+    )
+    thumbs_parser.add_argument(
+        "--max-size",
+        type=int,
+        default=512,
+        help="Maximum thumbnail width/height in pixels",
+    )
+    thumbs_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity",
+    )
+    thumbs_parser.add_argument(
+        "--quiet-progress",
+        action="store_true",
+        help="Disable structured progress prints during thumbnail generation",
+    )
     return parser
 
 
@@ -110,6 +145,8 @@ def main(argv: list[str] | None = None) -> int:
 
         unsupported_extensions = store.get_unsupported_extension_counts(scan.scan_id)
         failed_files = store.get_failed_files(scan.scan_id, limit=max(1, int(args.failed_limit)))
+        thumbnail_statuses = store.get_thumbnail_status_counts()
+        failed_thumbnails = store.get_failed_thumbnails(limit=max(1, int(args.failed_limit)))
         coverage_total_rows, coverage_rows = store.get_column_non_null_coverage(
             scan.scan_id,
             sort_order=args.coverage_sort,
@@ -122,8 +159,26 @@ def main(argv: list[str] | None = None) -> int:
                 coverage_rows=coverage_rows,
                 coverage_total_rows=coverage_total_rows,
                 failed_limit=max(1, int(args.failed_limit)),
+                thumbnail_statuses=thumbnail_statuses,
+                failed_thumbnails=failed_thumbnails,
             )
         )
+        return 0
+
+    if args.command == "thumbs":
+        logging.basicConfig(
+            level=getattr(logging, args.log_level),
+            format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        )
+        result = run_thumbnail_pipeline(
+            db_path=args.db_path,
+            out_dir=args.out_dir,
+            max_size=max(1, int(args.max_size)),
+            progress=ProgressPrinter(enabled=not args.quiet_progress),
+        )
+        print(format_thumbnail_summary(result.summary))
+        print(f"DuckDB path: {result.db_path}")
+        print(f"Thumbnail output dir: {result.out_dir}")
         return 0
 
     logging.basicConfig(

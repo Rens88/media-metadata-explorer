@@ -5,6 +5,7 @@ Summary: Local-first media metadata ingestion pipeline
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
 Requires-Dist: duckdb<2.0.0,>=1.1.0
+Requires-Dist: Pillow<12.0.0,>=10.4.0
 Provides-Extra: dev
 Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"
 Provides-Extra: ui
@@ -78,6 +79,7 @@ This project is:
 
 * Python 3.11+
 * ExifTool available on `PATH`
+* Pillow (installed via project dependencies) for thumbnail generation
 
 Install ExifTool:
 
@@ -103,10 +105,52 @@ python -m photo_archive.cli scan /path/to/root \
   --export-path data/exports/photo_metadata.parquet
 ```
 
+By default, scans are **incremental**: only `new` and `changed` files are sent to ExifTool. Unchanged files reuse previously stored metadata.
+
+The CLI now prints structured progress lines with timestamp, topic, purpose, expectation, and stage duration.
+Final output also includes a `Comparison line` with mode, duration, extraction-attempt ratio, and `new+changed` count to compare incremental vs full-rescan runs.
+
+### Force full re-extraction
+
+```bash
+python -m photo_archive.cli scan /path/to/root \
+  --db-path data/db/photo_archive.duckdb \
+  --full-rescan
+```
+
+To suppress progress lines:
+
+```bash
+python -m photo_archive.cli scan /path/to/root --quiet-progress
+```
+
 ### Dry run (scan only)
 
 ```bash
 python -m photo_archive.cli scan /path/to/root --dry-run
+```
+
+### Report from latest scan
+
+```bash
+python -m photo_archive.cli report --db-path data/db/photo_archive.duckdb
+```
+
+The report command prints:
+
+- latest scan summary
+- changed/new/missing counts
+- failed files list
+- non-null coverage by column
+
+Optional flags:
+
+```bash
+python -m photo_archive.cli report \
+  --db-path data/db/photo_archive.duckdb \
+  --scan-id scan_20260330T123717_65c7fea4 \
+  --failed-limit 100 \
+  --coverage-sort asc
 ```
 
 ### Custom extensions
@@ -115,6 +159,22 @@ python -m photo_archive.cli scan /path/to/root --dry-run
 python -m photo_archive.cli scan /path/to/root \
   --extension .jpg --extension .jpeg --extension .png
 ```
+
+### Generate thumbnails (Phase 2 start)
+
+```bash
+python -m photo_archive.cli thumbs \
+  --db-path data/db/photo_archive.duckdb \
+  --out-dir data/thumbnails \
+  --max-size 512
+```
+
+Thumbnail generation is incremental:
+
+- always generates for files marked `new` or `changed`
+- regenerates if a thumbnail row/file is missing or previous status was failed
+- skips unchanged files with an existing successful thumbnail
+- cleans stale thumbnail rows/files for media now marked missing
 
 ## Tiny Streamlit Explorer
 
@@ -136,6 +196,12 @@ What it shows:
 - non-null count and non-null percentage per field
 - least-populated fields
 - sample rows for quick inspection
+- thumbnail status counts and a live gallery preview (when `thumbnails` exists)
+
+## Incremental Indexing Notes
+
+- `file_metadata` keeps the latest state per file (`new`, `changed`, `unchanged`, `missing`)
+- `scans` records one row per completed scan run with delta counts
 
 ---
 
@@ -160,7 +226,7 @@ Raw metadata is preserved as JSON to allow future enrichment without reprocessin
 * ExifTool (metadata extraction)
 * ffprobe (video metadata, future phase)
 * Pandas / Polars (data processing)
-* OpenCV (thumbnails, future phase)
+* Pillow (thumbnail generation)
 
 ---
 
