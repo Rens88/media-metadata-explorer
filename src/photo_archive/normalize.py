@@ -56,11 +56,6 @@ def normalize_record(
         fs_created_at=scan_record.fs_created_at,
         fs_modified_at=scan_record.fs_modified_at,
     )
-    if captured_at is None and scan_record.media_type == "video":
-        video_created_at = _extract_video_created_at(raw_metadata)
-        if video_created_at is not None:
-            captured_at = video_created_at
-            captured_at_source = "ffprobe:creation_time"
 
     extract_status, extract_error = derive_extract_status(scan_record, extraction)
 
@@ -157,6 +152,10 @@ def choose_best_timestamp(
     parsed = _coerce_datetime(value)
     if parsed:
         return parsed, f"exif:{key}"
+
+    video_created_at = _extract_video_created_at(raw_metadata)
+    if video_created_at:
+        return video_created_at, "ffprobe:creation_time"
 
     if filename_parse.parsed_datetime:
         return filename_parse.parsed_datetime, f"filename:{filename_parse.parsed_pattern}"

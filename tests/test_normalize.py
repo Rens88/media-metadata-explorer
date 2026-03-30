@@ -100,3 +100,59 @@ def test_unsupported_file_is_marked_skipped() -> None:
 
     assert normalized.extract_status == "skipped_unsupported"
     assert normalized.captured_at == scan_record.fs_created_at
+
+
+def test_video_metadata_fields_from_ffprobe_payload() -> None:
+    scan_record = FileScanRecord(
+        file_id="file-video-1",
+        path="/photos/video_1.mp4",
+        parent_folder="/photos",
+        filename="video_1.mp4",
+        extension=".mp4",
+        media_type="video",
+        size_bytes=4096,
+        fs_created_at=datetime(2020, 1, 1, 10, 0, 0, tzinfo=timezone.utc),
+        fs_modified_at=datetime(2020, 1, 2, 11, 0, 0, tzinfo=timezone.utc),
+        scan_root="/photos",
+        scan_time=datetime(2026, 3, 30, 8, 0, 0, tzinfo=timezone.utc),
+        is_supported=True,
+    )
+    extraction = ExtractionResult(
+        path=scan_record.path,
+        status="success",
+        raw_metadata={
+            "format": {
+                "duration": "61.25",
+                "bit_rate": "2500000",
+                "tags": {"creation_time": "2024-05-10T08:30:00Z"},
+            },
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "avg_frame_rate": "30000/1001",
+                    "width": 1920,
+                    "height": 1080,
+                }
+            ],
+        },
+    )
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        FilenameParseRecord(),
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
+
+    assert normalized.media_type == "video"
+    assert normalized.width == 1920
+    assert normalized.height == 1080
+    assert normalized.video_duration_seconds == 61.25
+    assert normalized.video_codec == "h264"
+    assert normalized.video_bitrate == 2500000
+    assert normalized.video_fps is not None
+    assert round(normalized.video_fps, 3) == 29.97
+    assert normalized.captured_at_source == "ffprobe:creation_time"

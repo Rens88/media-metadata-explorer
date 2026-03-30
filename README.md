@@ -15,9 +15,9 @@ Local-first ingestion and metadata extraction for large personal media collectio
 ### What this implements
 
 * recursive scan of a root folder
-* supported image type detection
+* supported media type detection (images + common videos)
 * filesystem metadata collection
-* embedded metadata extraction via ExifTool
+* embedded metadata extraction via ExifTool (images) and ffprobe (videos)
 * basic filename datetime parsing
 * normalization into a stable flat schema
 * persistence in DuckDB
@@ -65,6 +65,7 @@ This project is:
 
 * Python 3.11+
 * ExifTool available on `PATH`
+* ffprobe (from FFmpeg) available on `PATH` for video metadata extraction
 * Pillow (installed via project dependencies) for thumbnail generation
 
 Install ExifTool:
@@ -72,6 +73,12 @@ Install ExifTool:
 * macOS: `brew install exiftool`
 * Ubuntu/Debian: `sudo apt-get install libimage-exiftool-perl`
 * Windows: install ExifTool and ensure `exiftool` is available in terminal
+
+Install ffprobe (FFmpeg):
+
+* macOS: `brew install ffmpeg`
+* Ubuntu/Debian: `sudo apt-get install ffmpeg`
+* Windows: install FFmpeg and ensure `ffprobe` is available in terminal
 
 ---
 
@@ -91,7 +98,7 @@ python -m photo_archive.cli scan /path/to/root \
   --export-path data/exports/photo_metadata.parquet
 ```
 
-By default, scans are **incremental**: only `new` and `changed` files are sent to ExifTool. Unchanged files reuse previously stored metadata.
+By default, scans are **incremental**: only `new` and `changed` files are sent to metadata extractors (ExifTool for images, ffprobe for videos). Unchanged files reuse previously stored metadata.
 
 The CLI now prints structured progress lines with timestamp, topic, purpose, expectation, and stage duration.
 Final output also includes a `Comparison line` with mode, duration, extraction-attempt ratio, and `new+changed` count to compare incremental vs full-rescan runs.
@@ -126,6 +133,7 @@ The report command prints:
 
 - latest scan summary
 - changed/new/missing counts
+- image/video extraction stats
 - failed files list
 - thumbnail status counts and failed thumbnail list
 - non-null coverage by column

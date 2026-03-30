@@ -544,71 +544,46 @@ class DuckDBStore:
         if not self.db_path.exists():
             return None
 
+        order_or_where = "WHERE scan_id = ?" if scan_id else "ORDER BY finished_at DESC LIMIT 1"
+        params = [scan_id] if scan_id else []
+        new_columns_select = (
+            "scan_id, scan_root, started_at, finished_at, files_discovered, supported_files, "
+            "new_files, changed_files, unchanged_files, missing_files, extraction_attempted, "
+            "extraction_successful, extraction_failed, dry_run, image_extraction_attempted, "
+            "image_extraction_successful, image_extraction_failed, video_extraction_attempted, "
+            "video_extraction_successful, video_extraction_failed"
+        )
+        old_columns_select = (
+            "scan_id, scan_root, started_at, finished_at, files_discovered, supported_files, "
+            "new_files, changed_files, unchanged_files, missing_files, extraction_attempted, "
+            "extraction_successful, extraction_failed, dry_run"
+        )
+
         try:
             with duckdb.connect(str(self.db_path)) as conn:
-                if scan_id:
-                    row = conn.execute(
-                        f"""
-                        SELECT
-                            scan_id,
-                            scan_root,
-                            started_at,
-                            finished_at,
-                            files_discovered,
-                            supported_files,
-                            new_files,
-                            changed_files,
-                            unchanged_files,
-                            missing_files,
-                            extraction_attempted,
-                            extraction_successful,
-                            extraction_failed,
-                            dry_run,
-                            image_extraction_attempted,
-                            image_extraction_successful,
-                            image_extraction_failed,
-                            video_extraction_attempted,
-                            video_extraction_successful,
-                            video_extraction_failed
-                        FROM {SCANS_TABLE_NAME}
-                        WHERE scan_id = ?
-                        """,
-                        [scan_id],
-                    ).fetchone()
-                else:
-                    row = conn.execute(
-                        f"""
-                        SELECT
-                            scan_id,
-                            scan_root,
-                            started_at,
-                            finished_at,
-                            files_discovered,
-                            supported_files,
-                            new_files,
-                            changed_files,
-                            unchanged_files,
-                            missing_files,
-                            extraction_attempted,
-                            extraction_successful,
-                            extraction_failed,
-                            dry_run,
-                            image_extraction_attempted,
-                            image_extraction_successful,
-                            image_extraction_failed,
-                            video_extraction_attempted,
-                            video_extraction_successful,
-                            video_extraction_failed
-                        FROM {SCANS_TABLE_NAME}
-                        ORDER BY finished_at DESC
-                        LIMIT 1
-                        """
-                    ).fetchone()
+                row = conn.execute(
+                    f"SELECT {new_columns_select} FROM {SCANS_TABLE_NAME} {order_or_where}",
+                    params,
+                ).fetchone()
         except duckdb.Error:
-            return None
+            try:
+                with duckdb.connect(str(self.db_path)) as conn:
+                    row = conn.execute(
+                        f"SELECT {old_columns_select} FROM {SCANS_TABLE_NAME} {order_or_where}",
+                        params,
+                    ).fetchone()
+            except duckdb.Error:
+                return None
 
         if row is None:
             return None
+
+        image_attempted = int(row[14]) if len(row) > 14 and row[14] is not None else 0
+        image_successful = int(row[15]) if len(row) > 15 and row[15] is not None else 0
+        image_failed = int(row[16]) if len(row) > 16 and row[16] is not None else 0
+        video_attempted = int(row[17]) if len(row) > 17 and row[17] is not None else 0
+        video_successful = int(row[18]) if len(row) > 18 and row[18] is not None else 0
+        video_failed = int(row[19]) if len(row) > 19 and row[19] is not None else 0
 
         return ScanHistoryRecord(
             scan_id=row[0],
@@ -625,12 +600,12 @@ class DuckDBStore:
             extraction_successful=int(row[11]),
             extraction_failed=int(row[12]),
             dry_run=bool(row[13]),
-            image_extraction_attempted=int(row[14]),
-            image_extraction_successful=int(row[15]),
-            image_extraction_failed=int(row[16]),
-            video_extraction_attempted=int(row[17]),
-            video_extraction_successful=int(row[18]),
-            video_extraction_failed=int(row[19]),
+            image_extraction_attempted=image_attempted,
+            image_extraction_successful=image_successful,
+            image_extraction_failed=image_failed,
+            video_extraction_attempted=video_attempted,
+            video_extraction_successful=video_successful,
+            video_extraction_failed=video_failed,
         )
 
     def get_failed_files(self, scan_id: str, limit: int = 50) -> list[FailedFileRecord]:

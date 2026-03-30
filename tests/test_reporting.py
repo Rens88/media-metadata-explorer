@@ -69,6 +69,12 @@ def test_summary_contains_comparison_line() -> None:
         extraction_duration_seconds=0.0,
         normalize_duration_seconds=0.4,
         persist_duration_seconds=0.3,
+        image_extraction_attempted=0,
+        image_extraction_successful=0,
+        image_extraction_failed=0,
+        video_extraction_attempted=0,
+        video_extraction_successful=0,
+        video_extraction_failed=0,
     )
     summary["run_duration_seconds"] = 2.0
 
@@ -76,6 +82,8 @@ def test_summary_contains_comparison_line() -> None:
     assert "Comparison line:" in text
     assert "mode=incremental" in text
     assert "extract_attempted=0/2" in text
+    assert "Image extraction this run:" in text
+    assert "Video extraction this run:" in text
 
 
 def test_format_cli_report_sections() -> None:
@@ -94,6 +102,12 @@ def test_format_cli_report_sections() -> None:
         extraction_successful=7,
         extraction_failed=0,
         dry_run=False,
+        image_extraction_attempted=5,
+        image_extraction_successful=5,
+        image_extraction_failed=0,
+        video_extraction_attempted=2,
+        video_extraction_successful=2,
+        video_extraction_failed=0,
     )
     failed_files = [
         FailedFileRecord(
@@ -142,6 +156,9 @@ def test_format_cli_report_sections() -> None:
     assert "unsupported_files: 10" in text
     assert ".mp4: 8" in text
     assert "Change counts" in text
+    assert "Media extraction stats" in text
+    assert "image: attempted=5, successful=5, failed=0" in text
+    assert "video: attempted=2, successful=2, failed=0" in text
     assert "Failed files (up to 50)" in text
     assert "Thumbnail stats" in text
     assert "total_rows: 124" in text

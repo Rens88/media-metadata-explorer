@@ -24,9 +24,11 @@ src/photo_archive/extractors/__init__.py
 src/photo_archive/extractors/exiftool_extractor.py
 src/photo_archive/extractors/ffprobe_extractor.py
 src/photo_archive/extractors/filename_parser.py
+tests/test_ffprobe_extractor.py
 tests/test_filename_parser.py
 tests/test_incremental.py
 tests/test_normalize.py
 tests/test_query_filters.py
 tests/test_reporting.py
+tests/test_scanner.py
 tests/test_thumbnail_pipeline.py
