@@ -8,16 +8,25 @@ The goal is simple: make your media collection searchable, explorable, and actua
 
 ---
 
+## Phase 1 (Current)
+
+Local-first ingestion and metadata extraction for large personal media collections.
+
+### What this implements
+
+* recursive scan of a root folder
+* supported image type detection
+* filesystem metadata collection
+* embedded metadata extraction via ExifTool
+* basic filename datetime parsing
+* normalization into a stable flat schema
+* persistence in DuckDB
+* export to CSV or Parquet
+* coverage and failure summary reporting
+
+---
+
 ## Features (Planned)
-
-### Phase 1 – Metadata Indexing
-
-* Recursive folder scanning
-* Image and video detection
-* Metadata extraction (EXIF, filesystem, video)
-* Filename parsing for additional context
-* Storage in a local database (DuckDB)
-* Thumbnail generation
 
 ### Phase 2 – Exploration UI
 
@@ -34,7 +43,7 @@ The goal is simple: make your media collection searchable, explorable, and actua
 
 ### Phase 4 – Advanced (Optional)
 
-* Face clustering and labeling
+* Face clustering and labeling (opt-in)
 * Event grouping
 * Video frame sampling and tagging
 
@@ -52,14 +61,72 @@ This project is:
 
 ---
 
+## Requirements
+
+* Python 3.11+
+* ExifTool available on `PATH`
+
+Install ExifTool:
+
+* macOS: `brew install exiftool`
+* Ubuntu/Debian: `sudo apt-get install libimage-exiftool-perl`
+* Windows: install ExifTool and ensure `exiftool` is available in terminal
+
+---
+
+## Installation
+
+```bash
+pip install -e ".[dev]"
+```
+
+---
+
+## Run
+
+```bash
+python -m photo_archive.cli scan /path/to/root \
+  --db-path data/db/photo_archive.duckdb \
+  --export-path data/exports/photo_metadata.parquet
+```
+
+### Dry run (scan only)
+
+```bash
+python -m photo_archive.cli scan /path/to/root --dry-run
+```
+
+### Custom extensions
+
+```bash
+python -m photo_archive.cli scan /path/to/root \
+  --extension .jpg --extension .jpeg --extension .png
+```
+
+---
+
+## Output Schema (Phase 1)
+
+A single wide table (`file_metadata`) is used in Phase 1. It includes:
+
+* file identity and filesystem fields
+* extracted and normalized metadata fields
+* raw ExifTool JSON payload
+* extraction status and error fields
+* filename parsing fields
+
+Raw metadata is preserved as JSON to allow future enrichment without reprocessing files.
+
+---
+
 ## Tech Stack (Phase 1)
 
 * Python
 * DuckDB (local analytical database)
 * ExifTool (metadata extraction)
-* ffprobe (video metadata)
-* OpenCV (thumbnails)
+* ffprobe (video metadata, future phase)
 * Pandas / Polars (data processing)
+* OpenCV (thumbnails, future phase)
 
 ---
 
@@ -83,63 +150,9 @@ media-metadata-explorer/
 
 ---
 
-## Getting Started (Phase 1)
-
-### 1. Install dependencies
-
-```bash
-pip install duckdb pandas opencv-python
-```
-
-Install external tools:
-
-* ExifTool: [https://exiftool.org/](https://exiftool.org/)
-* ffmpeg (for ffprobe): [https://ffmpeg.org/](https://ffmpeg.org/)
-
-### 2. Run indexing
-
-```bash
-python scripts/run_indexing.py --input /path/to/media
-```
-
-This will:
-
-* scan all files
-* extract metadata
-* populate the database
-* generate thumbnails
-
----
-
-## Data Model (Simplified)
-
-### files
-
-* path
-* filename
-* extension
-* size
-* created / modified timestamps
-
-### media_metadata
-
-* captured_at
-* width / height
-* duration (video)
-* camera make / model
-* GPS coordinates
-
-### thumbnails
-
-* file reference
-* thumbnail path
-
-Raw metadata is also stored as JSON for flexibility.
-
----
-
 ## Roadmap
 
+* [x] Phase 1: metadata ingestion pipeline
 * [ ] Robust metadata extraction across formats
 * [ ] Incremental re-indexing
 * [ ] UI (Streamlit)
