@@ -62,3 +62,20 @@ def test_classify_new_changed_unchanged_and_missing() -> None:
     assert result.new_files == 1
     assert result.changed_files == 1
     assert result.unchanged_files == 1
+
+
+def test_naive_and_utc_aware_timestamps_match_as_unchanged() -> None:
+    aware_mtime = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    naive_mtime = datetime(2026, 1, 1, 12, 0, 0)
+
+    existing = {
+        "/photos/a.jpg": _existing_record("/photos/a.jpg", 100, naive_mtime),
+    }
+    scan_records = [
+        _scan_record("/photos/a.jpg", 100, aware_mtime),
+    ]
+
+    result = classify_incremental_state(scan_records, existing)
+    assert result.state_by_path["/photos/a.jpg"] == "unchanged"
+    assert result.changed_files == 0
+    assert result.unchanged_files == 1

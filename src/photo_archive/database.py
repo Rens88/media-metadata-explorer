@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import astuple
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import duckdb
 
-from photo_archive.models import ExistingFileIndexRecord, NormalizedRecord, ScanHistoryRecord
+from photo_archive.models import (
+    ColumnCoverageRecord,
+    ExistingFileIndexRecord,
+    ExtensionCountRecord,
+    FailedFileRecord,
+    NormalizedRecord,
+    ScanHistoryRecord,
+)
 
 TABLE_NAME = "file_metadata"
 SCANS_TABLE_NAME = "scans"
@@ -164,6 +172,37 @@ class DuckDBStore:
         with duckdb.connect(str(self.db_path)) as conn:
             conn.executemany(INSERT_SQL, [astuple(record) for record in records])
 
+    def touch_unchanged_records(
+        self,
+        *,
+        scan_root: str,
+        scan_id: str,
+        scan_time: datetime,
+        paths: list[str],
+    ) -> int:
+        """Lightweight update for unchanged files to avoid full row upserts."""
+        if not paths:
+            return 0
+        path_rows = [(path,) for path in paths]
+        with duckdb.connect(str(self.db_path)) as conn:
+            conn.execute("CREATE TEMP TABLE _touch_paths(path VARCHAR)")
+            conn.executemany("INSERT INTO _touch_paths VALUES (?)", path_rows)
+            conn.execute(
+                f"""
+                UPDATE {TABLE_NAME} AS f
+                SET
+                    scan_id = ?,
+                    scan_time = ?,
+                    file_state = 'unchanged',
+                    last_seen_at = ?
+                FROM _touch_paths AS t
+                WHERE f.path = t.path
+                  AND f.scan_root = ?
+                """,
+                [scan_id, scan_time, scan_time, scan_root],
+            )
+        return len(paths)
+
     def load_existing_records(self, scan_root: str) -> dict[str, ExistingFileIndexRecord]:
         if not self.db_path.exists():
             return {}
@@ -259,10 +298,224 @@ class DuckDBStore:
         with duckdb.connect(str(self.db_path)) as conn:
             conn.execute(copy_sql)
 
+    def get_scan_history(self, scan_id: str | None = None) -> ScanHistoryRecord | None:
+        if not self.db_path.exists():
+            return None
+
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                if scan_id:
+                    row = conn.execute(
+                        f"""
+                        SELECT
+                            scan_id,
+                            scan_root,
+                            started_at,
+                            finished_at,
+                            files_discovered,
+                            supported_files,
+                            new_files,
+                            changed_files,
+                            unchanged_files,
+                            missing_files,
+                            extraction_attempted,
+                            extraction_successful,
+                            extraction_failed,
+                            dry_run
+                        FROM {SCANS_TABLE_NAME}
+                        WHERE scan_id = ?
+                        """,
+                        [scan_id],
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        f"""
+                        SELECT
+                            scan_id,
+                            scan_root,
+                            started_at,
+                            finished_at,
+                            files_discovered,
+                            supported_files,
+                            new_files,
+                            changed_files,
+                            unchanged_files,
+                            missing_files,
+                            extraction_attempted,
+                            extraction_successful,
+                            extraction_failed,
+                            dry_run
+                        FROM {SCANS_TABLE_NAME}
+                        ORDER BY finished_at DESC
+                        LIMIT 1
+                        """
+                    ).fetchone()
+        except duckdb.Error:
+            return None
+
+        if row is None:
+            return None
+
+        return ScanHistoryRecord(
+            scan_id=row[0],
+            scan_root=row[1],
+            started_at=row[2],
+            finished_at=row[3],
+            files_discovered=int(row[4]),
+            supported_files=int(row[5]),
+            new_files=int(row[6]),
+            changed_files=int(row[7]),
+            unchanged_files=int(row[8]),
+            missing_files=int(row[9]),
+            extraction_attempted=int(row[10]),
+            extraction_successful=int(row[11]),
+            extraction_failed=int(row[12]),
+            dry_run=bool(row[13]),
+        )
+
+    def get_failed_files(self, scan_id: str, limit: int = 50) -> list[FailedFileRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        path,
+                        extract_status,
+                        extract_error
+                    FROM {TABLE_NAME}
+                    WHERE scan_id = ?
+                      AND extract_status IN ('failed', 'failed_cached')
+                    ORDER BY path
+                    LIMIT ?
+                    """,
+                    [scan_id, int(limit)],
+                ).fetchall()
+        except duckdb.Error:
+            return []
+        return [
+            FailedFileRecord(
+                path=row[0],
+                extract_status=row[1],
+                extract_error=row[2],
+            )
+            for row in rows
+        ]
+
+    def get_column_non_null_coverage(
+        self,
+        scan_id: str,
+        *,
+        treat_empty_strings_as_missing: bool = True,
+        sort_order: Literal["asc", "desc"] = "asc",
+    ) -> tuple[int, list[ColumnCoverageRecord]]:
+        if not self.db_path.exists():
+            return 0, []
+
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                columns = conn.execute(
+                    """
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = 'main' AND table_name = ?
+                    ORDER BY ordinal_position
+                    """,
+                    [TABLE_NAME],
+                ).fetchall()
+
+                total_rows = int(
+                    conn.execute(
+                        f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE scan_id = ?",
+                        [scan_id],
+                    ).fetchone()[0]
+                )
+                if total_rows == 0 or not columns:
+                    return total_rows, []
+
+                count_expressions: list[str] = []
+                for index, (column_name, column_type) in enumerate(columns):
+                    alias = f"c_{index}"
+                    quoted = _quote_ident(column_name)
+                    type_upper = str(column_type).upper()
+                    if treat_empty_strings_as_missing and any(
+                        token in type_upper for token in ("CHAR", "TEXT", "VARCHAR")
+                    ):
+                        expr = (
+                            f"SUM(CASE WHEN {quoted} IS NOT NULL AND TRIM({quoted}) <> '' "
+                            f"THEN 1 ELSE 0 END) AS {alias}"
+                        )
+                    else:
+                        expr = f"COUNT({quoted}) AS {alias}"
+                    count_expressions.append(expr)
+
+                counts_query = (
+                    f"SELECT {', '.join(count_expressions)} "
+                    f"FROM {TABLE_NAME} WHERE scan_id = ?"
+                )
+                counts_row = conn.execute(counts_query, [scan_id]).fetchone()
+        except duckdb.Error:
+            return 0, []
+
+        rows: list[ColumnCoverageRecord] = []
+        for index, (column_name, column_type) in enumerate(columns):
+            non_null_count = int(counts_row[index])
+            null_count = int(total_rows - non_null_count)
+            non_null_pct = (non_null_count / total_rows) * 100.0
+            rows.append(
+                ColumnCoverageRecord(
+                    column_name=column_name,
+                    column_type=column_type,
+                    non_null_count=non_null_count,
+                    null_count=null_count,
+                    non_null_pct=round(non_null_pct, 2),
+                )
+            )
+
+        reverse = sort_order == "desc"
+        rows.sort(key=lambda item: (item.non_null_pct, item.column_name), reverse=reverse)
+        return total_rows, rows
+
+    def get_unsupported_extension_counts(self, scan_id: str) -> list[ExtensionCountRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        COALESCE(NULLIF(extension, ''), '[no_extension]') AS extension_label,
+                        COUNT(*) AS file_count
+                    FROM {TABLE_NAME}
+                    WHERE scan_id = ?
+                      AND is_supported = FALSE
+                    GROUP BY extension_label
+                    ORDER BY file_count DESC, extension_label ASC
+                    """,
+                    [scan_id],
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        return [
+            ExtensionCountRecord(extension=row[0], count=int(row[1]))
+            for row in rows
+        ]
+
 
 def _coerce_datetime(value: object) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
+        # DuckDB TIMESTAMP is timezone-naive when read through Python.
+        # We normalize to UTC-aware datetime so equality checks against
+        # scanner timestamps (also UTC-aware) are stable across runs.
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
     return None
+
+
+def _quote_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'

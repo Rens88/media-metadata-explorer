@@ -92,6 +92,9 @@ python -m photo_archive.cli scan /path/to/root \
 
 By default, scans are **incremental**: only `new` and `changed` files are sent to ExifTool. Unchanged files reuse previously stored metadata.
 
+The CLI now prints structured progress lines with timestamp, topic, purpose, expectation, and stage duration.
+Final output also includes a `Comparison line` with mode, duration, extraction-attempt ratio, and `new+changed` count to compare incremental vs full-rescan runs.
+
 ### Force full re-extraction
 
 ```bash
@@ -100,10 +103,39 @@ python -m photo_archive.cli scan /path/to/root \
   --full-rescan
 ```
 
+To suppress progress lines:
+
+```bash
+python -m photo_archive.cli scan /path/to/root --quiet-progress
+```
+
 ### Dry run (scan only)
 
 ```bash
 python -m photo_archive.cli scan /path/to/root --dry-run
+```
+
+### Report from latest scan
+
+```bash
+python -m photo_archive.cli report --db-path data/db/photo_archive.duckdb
+```
+
+The report command prints:
+
+- latest scan summary
+- changed/new/missing counts
+- failed files list
+- non-null coverage by column
+
+Optional flags:
+
+```bash
+python -m photo_archive.cli report \
+  --db-path data/db/photo_archive.duckdb \
+  --scan-id scan_20260330T123717_65c7fea4 \
+  --failed-limit 100 \
+  --coverage-sort asc
 ```
 
 ### Custom extensions

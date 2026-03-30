@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Mapping, Sequence
 
 from photo_archive.models import ExistingFileIndexRecord, FileScanRecord
@@ -66,4 +66,14 @@ def _same_file_version(
     previous_size: int | None,
     previous_modified: datetime | None,
 ) -> bool:
-    return (current_size == previous_size) and (current_modified == previous_modified)
+    return (current_size == previous_size) and (
+        _normalized_utc(current_modified) == _normalized_utc(previous_modified)
+    )
+
+
+def _normalized_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)

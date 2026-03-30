@@ -107,3 +107,25 @@ class ScanHistoryRecord:
     extraction_successful: int
     extraction_failed: int
     dry_run: bool
+
+
+@dataclass(slots=True)
+class FailedFileRecord:
+    path: str
+    extract_status: str
+    extract_error: str | None
+
+
+@dataclass(slots=True)
+class ColumnCoverageRecord:
+    column_name: str
+    column_type: str
+    non_null_count: int
+    null_count: int
+    non_null_pct: float
+
+
+@dataclass(slots=True)
+class ExtensionCountRecord:
+    extension: str
+    count: int

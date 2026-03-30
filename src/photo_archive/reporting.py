@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from typing import Any, Sequence
 
-from photo_archive.models import NormalizedRecord
+from photo_archive.models import (
+    ColumnCoverageRecord,
+    ExtensionCountRecord,
+    FailedFileRecord,
+    NormalizedRecord,
+    ScanHistoryRecord,
+)
 
 
 def build_run_summary(
@@ -17,6 +24,14 @@ def build_run_summary(
     extraction_successful: int = 0,
     extraction_failed: int = 0,
     full_rescan: bool = False,
+    scan_duration_seconds: float = 0.0,
+    state_duration_seconds: float = 0.0,
+    parse_duration_seconds: float = 0.0,
+    extraction_duration_seconds: float = 0.0,
+    normalize_duration_seconds: float = 0.0,
+    persist_duration_seconds: float = 0.0,
+    persist_upserted: int = 0,
+    persist_touched_unchanged: int = 0,
 ) -> dict[str, Any]:
     files_discovered = len(records)
     supported_records = [record for record in records if record.is_supported]
@@ -65,6 +80,14 @@ def build_run_summary(
         "extraction_successful": extraction_successful,
         "extraction_failed": extraction_failed,
         "full_rescan": full_rescan,
+        "scan_duration_seconds": scan_duration_seconds,
+        "state_duration_seconds": state_duration_seconds,
+        "parse_duration_seconds": parse_duration_seconds,
+        "extraction_duration_seconds": extraction_duration_seconds,
+        "normalize_duration_seconds": normalize_duration_seconds,
+        "persist_duration_seconds": persist_duration_seconds,
+        "persist_upserted": persist_upserted,
+        "persist_touched_unchanged": persist_touched_unchanged,
     }
 
 
@@ -83,6 +106,23 @@ def format_run_summary(summary: dict[str, Any]) -> str:
         f"Percent with camera_model: {summary['percent_with_camera_model']:.1f}%",
     ]
 
+    if "run_duration_seconds" in summary:
+        lines.append(f"Run duration: {_format_duration(summary['run_duration_seconds'])}")
+        lines.append(
+            "Stage times:"
+            f" scan={_format_duration(summary.get('scan_duration_seconds'))},"
+            f" state={_format_duration(summary.get('state_duration_seconds'))},"
+            f" parse={_format_duration(summary.get('parse_duration_seconds'))},"
+            f" extract={_format_duration(summary.get('extraction_duration_seconds'))},"
+            f" normalize={_format_duration(summary.get('normalize_duration_seconds'))},"
+            f" persist={_format_duration(summary.get('persist_duration_seconds'))}"
+        )
+        lines.append(
+            "Persist ops:"
+            f" upserted={summary.get('persist_upserted', 0)},"
+            f" touched_unchanged={summary.get('persist_touched_unchanged', 0)}"
+        )
+
     if "extraction_attempted" in summary:
         lines.append(f"Extraction attempts this run: {summary['extraction_attempted']}")
         lines.append(f"Extraction successes this run: {summary.get('extraction_successful', 0)}")
@@ -91,6 +131,13 @@ def format_run_summary(summary: dict[str, Any]) -> str:
             lines.append("Rescan mode: full_rescan")
         else:
             lines.append("Rescan mode: incremental (new/changed only)")
+        lines.append(
+            "Comparison line: "
+            + _comparison_line(summary)
+        )
+        lines.append(
+            "Expected on repeat runs: incremental should attempt fewer extracts and run faster than full_rescan."
+        )
 
     if summary["common_errors"]:
         lines.append("Common errors:")
@@ -104,3 +151,99 @@ def _percent(numerator: int, denominator: int) -> float:
     if denominator == 0:
         return 0.0
     return (numerator / denominator) * 100.0
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    if seconds < 1:
+        return f"{seconds * 1000:.0f}ms"
+    if seconds < 60:
+        return f"{seconds:.2f}s"
+    minutes = int(seconds // 60)
+    remainder = seconds - (minutes * 60)
+    return f"{minutes}m {remainder:.1f}s"
+
+
+def _comparison_line(summary: dict[str, Any]) -> str:
+    mode = "full_rescan" if summary.get("full_rescan") else "incremental"
+    extraction_attempted = int(summary.get("extraction_attempted", 0))
+    supported = int(summary.get("supported_files", 0))
+    new_files = int(summary.get("new_files", 0))
+    changed_files = int(summary.get("changed_files", 0))
+    run_duration = _format_duration(summary.get("run_duration_seconds"))
+    attempt_pct = _percent(extraction_attempted, supported)
+    return (
+        f"mode={mode} | duration={run_duration} | "
+        f"extract_attempted={extraction_attempted}/{supported} ({attempt_pct:.1f}%) | "
+        f"new+changed={new_files + changed_files}"
+    )
+
+
+def format_cli_report(
+    scan: ScanHistoryRecord,
+    unsupported_extensions: list[ExtensionCountRecord],
+    failed_files: list[FailedFileRecord],
+    coverage_rows: list[ColumnCoverageRecord],
+    coverage_total_rows: int,
+    *,
+    failed_limit: int,
+) -> str:
+    lines: list[str] = []
+    lines.append("Latest scan summary")
+    lines.append(f"  scan_id: {scan.scan_id}")
+    lines.append(f"  scan_root: {scan.scan_root}")
+    lines.append(f"  started_at: {_format_timestamp(scan.started_at)}")
+    lines.append(f"  finished_at: {_format_timestamp(scan.finished_at)}")
+    lines.append(
+        f"  duration: {_format_duration((scan.finished_at - scan.started_at).total_seconds())}"
+    )
+    lines.append(f"  files_discovered: {scan.files_discovered}")
+    lines.append(f"  supported_files: {scan.supported_files}")
+    if unsupported_extensions:
+        unsupported_total = sum(item.count for item in unsupported_extensions)
+        lines.append(f"  unsupported_files: {unsupported_total}")
+        lines.append("  unsupported_extensions:")
+        for item in unsupported_extensions:
+            lines.append(f"    {item.extension}: {item.count}")
+    else:
+        lines.append("  unsupported_files: 0")
+    lines.append("")
+
+    lines.append("Change counts")
+    lines.append(f"  new: {scan.new_files}")
+    lines.append(f"  changed: {scan.changed_files}")
+    lines.append(f"  missing: {scan.missing_files}")
+    lines.append(f"  unchanged: {scan.unchanged_files}")
+    lines.append("")
+
+    lines.append("Extraction stats")
+    lines.append(f"  attempted: {scan.extraction_attempted}")
+    lines.append(f"  successful: {scan.extraction_successful}")
+    lines.append(f"  failed: {scan.extraction_failed}")
+    lines.append("")
+
+    lines.append(f"Failed files (up to {failed_limit})")
+    if not failed_files:
+        lines.append("  none")
+    else:
+        for item in failed_files:
+            error_text = item.extract_error or "unknown_error"
+            lines.append(f"  [{item.extract_status}] {item.path} | {error_text}")
+    lines.append("")
+
+    lines.append(f"Non-null coverage by column (rows={coverage_total_rows})")
+    if not coverage_rows:
+        lines.append("  no rows for selected scan")
+    else:
+        for row in coverage_rows:
+            lines.append(
+                "  "
+                + f"{row.column_name}: {row.non_null_count}/{coverage_total_rows} "
+                + f"({row.non_null_pct:.1f}%) type={row.column_type}"
+            )
+    return "\n".join(lines)
+
+
+def _format_timestamp(value: datetime) -> str:
+    return value.isoformat(sep=" ", timespec="seconds")

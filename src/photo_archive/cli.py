@@ -4,8 +4,10 @@ import argparse
 import logging
 from pathlib import Path
 
+from photo_archive.database import DuckDBStore
 from photo_archive.pipeline import run_pipeline
-from photo_archive.reporting import format_run_summary
+from photo_archive.progress import ProgressPrinter
+from photo_archive.reporting import format_cli_report, format_run_summary
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -57,6 +59,37 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity",
     )
+    scan_parser.add_argument(
+        "--quiet-progress",
+        action="store_true",
+        help="Disable structured progress prints during pipeline execution",
+    )
+
+    report_parser = subparsers.add_parser("report", help="Show scan report from DuckDB")
+    report_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=Path("data/db/photo_archive.duckdb"),
+        help="DuckDB file path",
+    )
+    report_parser.add_argument(
+        "--scan-id",
+        type=str,
+        default=None,
+        help="Optional scan_id; defaults to latest scan",
+    )
+    report_parser.add_argument(
+        "--failed-limit",
+        type=int,
+        default=50,
+        help="Maximum number of failed files to show",
+    )
+    report_parser.add_argument(
+        "--coverage-sort",
+        choices=["asc", "desc"],
+        default="asc",
+        help="Sort non-null coverage by percentage (asc=least populated first)",
+    )
     return parser
 
 
@@ -64,9 +97,34 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.command != "scan":
+    if args.command is None:
         parser.print_help()
         return 1
+
+    if args.command == "report":
+        store = DuckDBStore(db_path=args.db_path)
+        scan = store.get_scan_history(scan_id=args.scan_id)
+        if scan is None:
+            print("No scan history found in the selected DuckDB file.")
+            return 1
+
+        unsupported_extensions = store.get_unsupported_extension_counts(scan.scan_id)
+        failed_files = store.get_failed_files(scan.scan_id, limit=max(1, int(args.failed_limit)))
+        coverage_total_rows, coverage_rows = store.get_column_non_null_coverage(
+            scan.scan_id,
+            sort_order=args.coverage_sort,
+        )
+        print(
+            format_cli_report(
+                scan=scan,
+                unsupported_extensions=unsupported_extensions,
+                failed_files=failed_files,
+                coverage_rows=coverage_rows,
+                coverage_total_rows=coverage_total_rows,
+                failed_limit=max(1, int(args.failed_limit)),
+            )
+        )
+        return 0
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
@@ -81,6 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         dry_run=args.dry_run,
         exif_batch_size=args.exif_batch_size,
         full_rescan=args.full_rescan,
+        progress=ProgressPrinter(enabled=not args.quiet_progress),
     )
     print(format_run_summary(result.summary))
     if args.dry_run:

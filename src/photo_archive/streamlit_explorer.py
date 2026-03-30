@@ -158,19 +158,19 @@ def main() -> None:
     col_c.metric("Fields >= 50% filled", f"{populated_half:,}")
 
     st.subheader("Field Coverage")
-    st.dataframe(coverage_df, use_container_width=True)
+    st.dataframe(coverage_df, width="stretch")
 
     st.subheader("Least Populated Fields")
     st.dataframe(
         coverage_df.sort_values(by=["non_null_pct", "column_name"], ascending=[True, True]).head(15),
-        use_container_width=True,
+        width="stretch",
     )
 
     st.subheader("Data Preview")
     preview_df = con.execute(
         f"SELECT * FROM {quote_ident(table_name)} LIMIT {int(sample_rows)}"
     ).df()
-    st.dataframe(preview_df, use_container_width=True)
+    st.dataframe(preview_df, width="stretch")
 
 
 if __name__ == "__main__":
