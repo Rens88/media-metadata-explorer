@@ -1,0 +1,40 @@
+Instruction for codex to pick-up progress:
+***
+Continue from current `media-metadata-explorer` state.
+
+Goal: Start Phase 2 by implementing thumbnail generation only (no broader UI work yet), aligned with `agents.md`.
+
+Mission:
+1. Build a thumbnail pipeline that reads indexed files from DuckDB and writes thumbnails to `data/thumbnails/`.
+2. Add a `thumbnails` table with at least:
+   - file_id
+   - thumb_path
+   - width
+   - height
+   - status
+   - error
+   - generated_at
+3. Make it incremental:
+   - generate thumbnails only for files that are `new`/`changed` (or missing thumbnail, if applicable).
+4. Add CLI command:
+   - `python -m photo_archive.cli thumbs --db-path ... --out-dir data/thumbnails --max-size 512`
+
+Constraints:
+- Local-first only.
+- Robust per-file failure handling (fail per file, not per run).
+- Keep logging/progress style consistent with existing scan pipeline.
+- Do not add AI/semantic/gallery/map features in this step.
+
+Implementation expectations:
+- Use a mature image library (e.g., Pillow) for thumbnail creation.
+- Preserve aspect ratio.
+- Handle unsupported/corrupt images gracefully with `status` + `error`.
+- Keep schema migration/backward compatibility in DuckDB setup.
+- Add tests for thumbnail selection logic and DB write behavior.
+
+Definition of done:
+- `thumbs` command runs end-to-end.
+- Thumbnails are created under `data/thumbnails/`.
+- `thumbnails` table is populated and queryable.
+- Incremental rerun avoids regenerating unchanged thumbnails.
+- Summary output reports generated/skipped/failed counts.

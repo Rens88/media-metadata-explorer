@@ -34,6 +34,10 @@ def _existing_record(path: str, size_bytes: int, mtime: datetime) -> ExistingFil
         is_supported=True,
         file_state="unchanged",
         first_seen_at=mtime,
+        captured_at=mtime,
+        gps_lat=None,
+        gps_lon=None,
+        camera_model="Camera",
     )
 
 

@@ -89,6 +89,10 @@ class ExistingFileIndexRecord:
     is_supported: bool
     file_state: str | None
     first_seen_at: datetime | None
+    captured_at: datetime | None
+    gps_lat: float | None
+    gps_lon: float | None
+    camera_model: str | None
 
 
 @dataclass(slots=True)

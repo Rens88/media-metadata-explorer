@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import json
 from pathlib import Path
 from time import perf_counter
 from uuid import uuid4
@@ -15,6 +14,8 @@ from photo_archive.incremental import classify_incremental_state
 from photo_archive.models import (
     ExistingFileIndexRecord,
     ExtractionResult,
+    FileScanRecord,
+    FilenameParseRecord,
     NormalizedRecord,
     ScanHistoryRecord,
 )
@@ -92,11 +93,16 @@ def run_pipeline(
     progress_printer.start(
         topic="PARSE",
         purpose="parse filename datetime patterns",
-        expectation="optional timestamp hints",
+        expectation="optional timestamp hints for files needing refresh",
     )
-    filename_parse_by_path = {
-        record.path: parse_filename_datetime(record.filename) for record in scan_records
-    }
+    filename_parse_by_path: dict[str, FilenameParseRecord] = {}
+    for record in scan_records:
+        file_state = incremental.state_by_path.get(record.path, "new")
+        should_parse = record.is_supported and (
+            full_rescan or file_state in {"new", "changed"}
+        )
+        if should_parse:
+            filename_parse_by_path[record.path] = parse_filename_datetime(record.filename)
     parse_duration_seconds = progress_printer.done(
         "PARSE",
         details=f"parsed_candidates={len(filename_parse_by_path)}",
@@ -140,18 +146,27 @@ def run_pipeline(
     )
     normalized_records: list[NormalizedRecord] = []
     for scan_record in scan_records:
-        parse_record = filename_parse_by_path[scan_record.path]
-        extraction = extraction_by_path.get(scan_record.path)
         file_state = incremental.state_by_path.get(scan_record.path, "new")
         existing_record = existing_by_path.get(scan_record.path)
+
+        if file_state == "unchanged" and existing_record is not None:
+            normalized_records.append(
+                _normalized_from_existing(
+                    scan_record=scan_record,
+                    existing_record=existing_record,
+                    scan_id=scan_id,
+                    scan_time=scan_time,
+                )
+            )
+            continue
+
+        parse_record = filename_parse_by_path.get(scan_record.path, FilenameParseRecord())
+        extraction = extraction_by_path.get(scan_record.path)
 
         if dry_run and scan_record.is_supported and _should_extract(
             scan_record.path, incremental.state_by_path, full_rescan
         ):
             extraction = ExtractionResult(path=scan_record.path, status="skipped_dry_run")
-
-        if extraction is None and scan_record.is_supported and file_state == "unchanged":
-            extraction = _cached_extraction_result(existing_record)
 
         first_seen_at = (
             existing_record.first_seen_at if existing_record and existing_record.first_seen_at else scan_time
@@ -286,30 +301,46 @@ def _should_extract(path: str, state_by_path: dict[str, str], full_rescan: bool)
     return state_by_path.get(path) in {"new", "changed"}
 
 
-def _cached_extraction_result(
-    existing_record: ExistingFileIndexRecord | None,
-) -> ExtractionResult | None:
-    if existing_record is None:
-        return None
-
-    raw_metadata: dict[str, object] | None = None
-    if existing_record.raw_metadata_json:
-        try:
-            parsed = json.loads(existing_record.raw_metadata_json)
-            if isinstance(parsed, dict):
-                raw_metadata = parsed
-        except json.JSONDecodeError:
-            raw_metadata = None
-
-    if raw_metadata:
-        return ExtractionResult(
-            path=existing_record.path,
-            status="success_cached",
-            raw_metadata=raw_metadata,
-        )
-
-    return ExtractionResult(
-        path=existing_record.path,
-        status="failed_cached",
-        error=existing_record.extract_error or "missing_cached_metadata",
+def _normalized_from_existing(
+    *,
+    scan_record: FileScanRecord,
+    existing_record: ExistingFileIndexRecord,
+    scan_id: str,
+    scan_time: datetime,
+) -> NormalizedRecord:
+    return NormalizedRecord(
+        file_id=scan_record.file_id,
+        scan_id=scan_id,
+        path=scan_record.path,
+        parent_folder=scan_record.parent_folder,
+        filename=scan_record.filename,
+        extension=scan_record.extension,
+        media_type=scan_record.media_type,
+        size_bytes=scan_record.size_bytes,
+        fs_created_at=scan_record.fs_created_at,
+        fs_modified_at=scan_record.fs_modified_at,
+        scan_root=scan_record.scan_root,
+        scan_time=scan_record.scan_time,
+        is_supported=scan_record.is_supported,
+        captured_at=existing_record.captured_at,
+        captured_at_source=None,
+        gps_lat=existing_record.gps_lat,
+        gps_lon=existing_record.gps_lon,
+        gps_alt=None,
+        camera_make=None,
+        camera_model=existing_record.camera_model,
+        lens_model=None,
+        software=None,
+        width=None,
+        height=None,
+        orientation=None,
+        raw_metadata_json=None,
+        extract_status=existing_record.extract_status or "success_cached",
+        extract_error=existing_record.extract_error,
+        file_state="unchanged",
+        first_seen_at=existing_record.first_seen_at or scan_time,
+        last_seen_at=scan_time,
+        parsed_datetime=None,
+        parsed_pattern=None,
+        parse_confidence=None,
     )

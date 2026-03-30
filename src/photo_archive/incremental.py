@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import time
 from typing import Mapping, Sequence
 
 from photo_archive.models import ExistingFileIndexRecord, FileScanRecord
@@ -66,14 +67,44 @@ def _same_file_version(
     previous_size: int | None,
     previous_modified: datetime | None,
 ) -> bool:
-    return (current_size == previous_size) and (
-        _normalized_utc(current_modified) == _normalized_utc(previous_modified)
+    return (current_size == previous_size) and _timestamps_equivalent(
+        current_modified, previous_modified
     )
 
 
-def _normalized_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+def _timestamps_equivalent(left: datetime | None, right: datetime | None) -> bool:
+    if left is None and right is None:
+        return True
+    if left is None or right is None:
+        return False
+
+    left_candidates = _utc_candidates(left)
+    right_candidates = _utc_candidates(right)
+    for left_value in left_candidates:
+        for right_value in right_candidates:
+            if abs((left_value - right_value).total_seconds()) <= 0.001:
+                return True
+    return False
+
+
+def _utc_candidates(value: datetime) -> list[datetime]:
+    if value.tzinfo is not None:
+        return [value.astimezone(timezone.utc)]
+
+    # DuckDB TIMESTAMP can come back naive; depending on driver/platform,
+    # that value may effectively represent UTC or local wall-clock time.
+    # We include UTC plus local standard and DST offsets to avoid false
+    # "changed" classifications across timezone/DST interpretation boundaries.
+    offset_seconds = {0, -time.timezone}
+    if time.daylight:
+        offset_seconds.add(-time.altzone)
+
+    candidates: list[datetime] = []
+    seen: set[datetime] = set()
+    for seconds in offset_seconds:
+        tz = timezone(timedelta(seconds=seconds))
+        normalized = value.replace(tzinfo=tz).astimezone(timezone.utc)
+        if normalized not in seen:
+            candidates.append(normalized)
+            seen.add(normalized)
+    return candidates

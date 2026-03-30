@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import astuple
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -221,7 +221,11 @@ class DuckDBStore:
                         extract_error,
                         is_supported,
                         file_state,
-                        first_seen_at
+                        first_seen_at,
+                        captured_at,
+                        gps_lat,
+                        gps_lon,
+                        camera_model
                     FROM {TABLE_NAME}
                     WHERE scan_root = ?
                     """,
@@ -243,6 +247,10 @@ class DuckDBStore:
                 is_supported=bool(row[8]),
                 file_state=row[9],
                 first_seen_at=_coerce_datetime(row[10]),
+                captured_at=_coerce_datetime(row[11]),
+                gps_lat=float(row[12]) if row[12] is not None else None,
+                gps_lon=float(row[13]) if row[13] is not None else None,
+                camera_model=row[14],
             )
         return output
 
@@ -508,12 +516,9 @@ def _coerce_datetime(value: object) -> datetime | None:
     if value is None:
         return None
     if isinstance(value, datetime):
-        # DuckDB TIMESTAMP is timezone-naive when read through Python.
-        # We normalize to UTC-aware datetime so equality checks against
-        # scanner timestamps (also UTC-aware) are stable across runs.
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value.astimezone(timezone.utc)
+        # Keep original timezone/naive shape. Incremental comparison logic
+        # handles ambiguous naive timestamps explicitly.
+        return value
     return None
 
 
