@@ -64,7 +64,7 @@ class ExifToolExtractor:
             process = subprocess.run(
                 command,
                 capture_output=True,
-                text=True,
+                text=False,
                 check=False,
                 timeout=self.timeout_seconds,
             )
@@ -75,8 +75,11 @@ class ExifToolExtractor:
             error = f"exiftool_exec_failed: {exc}"
             return self._batch_failure(batch, error)
 
+        stdout = _decode_subprocess_bytes(process.stdout)
+        stderr_text = _decode_subprocess_bytes(process.stderr)
+
         entries: list[dict[str, Any]] = []
-        stdout = process.stdout.strip()
+        stdout = stdout.strip()
         if stdout:
             try:
                 raw = json.loads(stdout)
@@ -106,7 +109,7 @@ class ExifToolExtractor:
             resolved = str(path.resolve(strict=False))
             raw_metadata = by_source_file.get(resolved)
             if raw_metadata is None:
-                stderr = process.stderr.strip() or None
+                stderr = stderr_text.strip() or None
                 error = "exiftool_missing_output"
                 if process.returncode != 0:
                     error = f"exiftool_failed_rc_{process.returncode}"
@@ -121,7 +124,7 @@ class ExifToolExtractor:
                     path=resolved,
                     status="success",
                     raw_metadata=raw_metadata,
-                    stderr=process.stderr.strip() or None,
+                    stderr=stderr_text.strip() or None,
                 )
         return batch_results
 
@@ -138,3 +141,12 @@ class ExifToolExtractor:
                 stderr=stderr,
             )
         return output
+
+
+def _decode_subprocess_bytes(value: bytes | None) -> str:
+    if value is None:
+        return ""
+    try:
+        return value.decode("utf-8")
+    except UnicodeDecodeError:
+        return value.decode("utf-8", errors="replace")

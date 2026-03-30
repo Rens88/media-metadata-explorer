@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Number of files per ExifTool batch call",
     )
     scan_parser.add_argument(
+        "--full-rescan",
+        action="store_true",
+        help="Re-extract metadata for all supported files, including unchanged files",
+    )
+    scan_parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -75,11 +80,13 @@ def main(argv: list[str] | None = None) -> int:
         extensions=args.extension,
         dry_run=args.dry_run,
         exif_batch_size=args.exif_batch_size,
+        full_rescan=args.full_rescan,
     )
     print(format_run_summary(result.summary))
     if args.dry_run:
         print("Dry run enabled: no DuckDB writes or exports were performed.")
     else:
+        print(f"Scan ID: {result.scan_id}")
         print(f"DuckDB path: {result.db_path}")
         if result.export_path:
             print(f"Export path: {result.export_path}")

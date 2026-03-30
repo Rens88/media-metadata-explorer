@@ -42,6 +42,10 @@ def normalize_record(
     scan_record: FileScanRecord,
     extraction: ExtractionResult | None,
     filename_parse: FilenameParseRecord,
+    scan_id: str,
+    file_state: str,
+    first_seen_at: datetime | None,
+    last_seen_at: datetime | None,
 ) -> NormalizedRecord:
     raw_metadata = extraction.raw_metadata if extraction and extraction.raw_metadata else {}
 
@@ -56,6 +60,7 @@ def normalize_record(
 
     return NormalizedRecord(
         file_id=scan_record.file_id,
+        scan_id=scan_id,
         path=scan_record.path,
         parent_folder=scan_record.parent_folder,
         filename=scan_record.filename,
@@ -86,6 +91,9 @@ def normalize_record(
         ),
         extract_status=extract_status,
         extract_error=extract_error,
+        file_state=file_state,
+        first_seen_at=first_seen_at,
+        last_seen_at=last_seen_at,
         parsed_datetime=filename_parse.parsed_datetime,
         parsed_pattern=filename_parse.parsed_pattern,
         parse_confidence=filename_parse.parse_confidence,
@@ -107,8 +115,14 @@ def derive_extract_status(
     if extraction.status == "success":
         return "success", scan_record.scan_error
 
+    if extraction.status == "success_cached":
+        return "success_cached", extraction.error or scan_record.scan_error
+
     if extraction.status == "skipped_dry_run":
         return "skipped_dry_run", scan_record.scan_error
+
+    if extraction.status == "failed_cached":
+        return "failed_cached", extraction.error or scan_record.scan_error
 
     error = extraction.error or scan_record.scan_error or "extraction_failed"
     return "failed", error

@@ -41,6 +41,7 @@ class FilenameParseRecord:
 @dataclass(slots=True)
 class NormalizedRecord:
     file_id: str
+    scan_id: str
     path: str
     parent_folder: str
     filename: str
@@ -67,6 +68,42 @@ class NormalizedRecord:
     raw_metadata_json: str | None
     extract_status: str
     extract_error: str | None
+    file_state: str
+    first_seen_at: datetime | None
+    last_seen_at: datetime | None
     parsed_datetime: datetime | None
     parsed_pattern: str | None
     parse_confidence: float | None
+
+
+@dataclass(slots=True)
+class ExistingFileIndexRecord:
+    file_id: str
+    path: str
+    scan_root: str
+    size_bytes: int | None
+    fs_modified_at: datetime | None
+    raw_metadata_json: str | None
+    extract_status: str | None
+    extract_error: str | None
+    is_supported: bool
+    file_state: str | None
+    first_seen_at: datetime | None
+
+
+@dataclass(slots=True)
+class ScanHistoryRecord:
+    scan_id: str
+    scan_root: str
+    started_at: datetime
+    finished_at: datetime
+    files_discovered: int
+    supported_files: int
+    new_files: int
+    changed_files: int
+    unchanged_files: int
+    missing_files: int
+    extraction_attempted: int
+    extraction_successful: int
+    extraction_failed: int
+    dry_run: bool

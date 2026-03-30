@@ -1,3 +1,16 @@
+Metadata-Version: 2.4
+Name: photo-archive
+Version: 0.1.0
+Summary: Local-first media metadata ingestion pipeline
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: duckdb<2.0.0,>=1.1.0
+Provides-Extra: dev
+Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"
+Provides-Extra: ui
+Requires-Dist: pandas<3.0.0,>=2.2.0; extra == "ui"
+Requires-Dist: streamlit<2.0.0,>=1.40.0; extra == "ui"
+
 # Media Metadata Explorer
 
 ## Overview
@@ -90,16 +103,6 @@ python -m photo_archive.cli scan /path/to/root \
   --export-path data/exports/photo_metadata.parquet
 ```
 
-By default, scans are **incremental**: only `new` and `changed` files are sent to ExifTool. Unchanged files reuse previously stored metadata.
-
-### Force full re-extraction
-
-```bash
-python -m photo_archive.cli scan /path/to/root \
-  --db-path data/db/photo_archive.duckdb \
-  --full-rescan
-```
-
 ### Dry run (scan only)
 
 ```bash
@@ -133,11 +136,6 @@ What it shows:
 - non-null count and non-null percentage per field
 - least-populated fields
 - sample rows for quick inspection
-
-## Incremental Indexing Notes
-
-- `file_metadata` keeps the latest state per file (`new`, `changed`, `unchanged`, `missing`)
-- `scans` records one row per completed scan run with delta counts
 
 ---
 

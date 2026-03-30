@@ -33,7 +33,15 @@ def test_timestamp_prefers_exif_original() -> None:
     )
     filename_parse = FilenameParseRecord(parsed_datetime=datetime(2022, 3, 4, 15, 30, 12))
 
-    normalized = normalize_record(scan_record, extraction, filename_parse)
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        filename_parse,
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
     assert normalized.captured_at == datetime(2019, 7, 4, 12, 13, 14)
     assert normalized.captured_at_source == "exif:EXIF:DateTimeOriginal"
 
@@ -47,7 +55,15 @@ def test_timestamp_falls_back_to_filename_then_filesystem() -> None:
         parse_confidence=0.95,
     )
 
-    normalized = normalize_record(scan_record, extraction, filename_parse)
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        filename_parse,
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
     assert normalized.captured_at == datetime(2022, 3, 4, 15, 30, 12)
     assert normalized.captured_at_source == "filename:img_yyyymmdd_hhmmss"
 
@@ -57,14 +73,30 @@ def test_timestamp_falls_back_to_filesystem_when_filename_missing() -> None:
     extraction = ExtractionResult(path=scan_record.path, status="success", raw_metadata={})
     filename_parse = FilenameParseRecord()
 
-    normalized = normalize_record(scan_record, extraction, filename_parse)
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        filename_parse,
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
     assert normalized.captured_at == scan_record.fs_created_at
     assert normalized.captured_at_source == "filesystem:created"
 
 
 def test_unsupported_file_is_marked_skipped() -> None:
     scan_record = _build_scan_record(is_supported=False)
-    normalized = normalize_record(scan_record, extraction=None, filename_parse=FilenameParseRecord())
+    normalized = normalize_record(
+        scan_record,
+        extraction=None,
+        filename_parse=FilenameParseRecord(),
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
 
     assert normalized.extract_status == "skipped_unsupported"
     assert normalized.captured_at == scan_record.fs_created_at
