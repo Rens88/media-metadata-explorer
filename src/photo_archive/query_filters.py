@@ -40,6 +40,10 @@ def build_media_filter_where_sql(
     captured_from: datetime | None,
     captured_to: datetime | None,
     has_thumbnails: bool,
+    lat_min: float | None = None,
+    lat_max: float | None = None,
+    lon_min: float | None = None,
+    lon_max: float | None = None,
 ) -> tuple[str, list[Any]]:
     filters: list[str] = []
     params: list[Any] = []
@@ -62,6 +66,19 @@ def build_media_filter_where_sql(
         filters.append("f.gps_lat IS NOT NULL AND f.gps_lon IS NOT NULL")
     elif gps_filter == "no_gps":
         filters.append("(f.gps_lat IS NULL OR f.gps_lon IS NULL)")
+
+    if lat_min is not None:
+        filters.append("f.gps_lat >= ?")
+        params.append(float(lat_min))
+    if lat_max is not None:
+        filters.append("f.gps_lat <= ?")
+        params.append(float(lat_max))
+    if lon_min is not None:
+        filters.append("f.gps_lon >= ?")
+        params.append(float(lon_min))
+    if lon_max is not None:
+        filters.append("f.gps_lon <= ?")
+        params.append(float(lon_max))
 
     if captured_from is not None:
         filters.append("f.captured_at >= ?")

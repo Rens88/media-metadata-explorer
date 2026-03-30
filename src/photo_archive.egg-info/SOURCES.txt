@@ -9,6 +9,7 @@ src/photo_archive/models.py
 src/photo_archive/normalize.py
 src/photo_archive/pipeline.py
 src/photo_archive/progress.py
+src/photo_archive/query_filters.py
 src/photo_archive/reporting.py
 src/photo_archive/scanner.py
 src/photo_archive/streamlit_explorer.py
@@ -21,9 +22,11 @@ src/photo_archive.egg-info/requires.txt
 src/photo_archive.egg-info/top_level.txt
 src/photo_archive/extractors/__init__.py
 src/photo_archive/extractors/exiftool_extractor.py
+src/photo_archive/extractors/ffprobe_extractor.py
 src/photo_archive/extractors/filename_parser.py
 tests/test_filename_parser.py
 tests/test_incremental.py
 tests/test_normalize.py
+tests/test_query_filters.py
 tests/test_reporting.py
 tests/test_thumbnail_pipeline.py

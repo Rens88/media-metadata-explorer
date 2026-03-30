@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from photo_archive.config import media_type_for_extension
 from photo_archive.models import FileScanRecord
 
 LOGGER = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ def scan_directory(
             file_path = parent / filename
             extension = file_path.suffix.lower()
             is_supported = extension in supported_extensions
+            media_type = media_type_for_extension(extension, supported_extensions)
             size_bytes: int | None = None
             fs_created_at: datetime | None = None
             fs_modified_at: datetime | None = None
@@ -71,7 +73,7 @@ def scan_directory(
                     parent_folder=str(parent.resolve(strict=False)),
                     filename=file_path.name,
                     extension=extension,
-                    media_type="image" if is_supported else "unknown",
+                    media_type=media_type,
                     size_bytes=size_bytes,
                     fs_created_at=fs_created_at,
                     fs_modified_at=fs_modified_at,

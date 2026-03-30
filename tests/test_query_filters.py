@@ -125,3 +125,73 @@ def test_resolve_timeline_bucket_sql_defaults_to_day() -> None:
 def test_resolve_timeline_bucket_sql_month() -> None:
     expr = resolve_timeline_bucket_sql("Month")
     assert expr == "DATE_TRUNC('month', COALESCE(f.captured_at, f.fs_modified_at))"
+
+
+def test_build_media_filter_where_sql_no_gps_clause() -> None:
+    where_sql, params = build_media_filter_where_sql(
+        search_text="",
+        only_supported=False,
+        file_states=[],
+        extensions=[],
+        extract_statuses=[],
+        thumb_statuses=[],
+        parent_folders=[],
+        camera_models=[],
+        gps_filter="no_gps",
+        captured_from=None,
+        captured_to=None,
+        has_thumbnails=True,
+    )
+
+    assert "(f.gps_lat IS NULL OR f.gps_lon IS NULL)" in where_sql
+    assert params == []
+
+
+def test_build_media_filter_where_sql_date_params_order() -> None:
+    captured_from = datetime(2025, 1, 1, 0, 0, 0)
+    captured_to = datetime(2025, 2, 1, 0, 0, 0)
+    where_sql, params = build_media_filter_where_sql(
+        search_text="",
+        only_supported=False,
+        file_states=[],
+        extensions=[],
+        extract_statuses=[],
+        thumb_statuses=[],
+        parent_folders=[],
+        camera_models=[],
+        gps_filter="any",
+        captured_from=captured_from,
+        captured_to=captured_to,
+        has_thumbnails=True,
+    )
+
+    assert "f.captured_at >= ?" in where_sql
+    assert "f.captured_at < ?" in where_sql
+    assert params == [captured_from, captured_to]
+
+
+def test_build_media_filter_where_sql_with_lat_lon_bounds() -> None:
+    where_sql, params = build_media_filter_where_sql(
+        search_text="",
+        only_supported=False,
+        file_states=[],
+        extensions=[],
+        extract_statuses=[],
+        thumb_statuses=[],
+        parent_folders=[],
+        camera_models=[],
+        gps_filter="any",
+        captured_from=None,
+        captured_to=None,
+        has_thumbnails=True,
+        lat_min=52.1,
+        lat_max=52.6,
+        lon_min=4.2,
+        lon_max=5.0,
+    )
+
+    assert "f.gps_lat >= ?" in where_sql
+    assert "f.gps_lat <= ?" in where_sql
+    assert "f.gps_lon >= ?" in where_sql
+    assert "f.gps_lon <= ?" in where_sql
+    assert params == [52.1, 52.6, 4.2, 5.0]

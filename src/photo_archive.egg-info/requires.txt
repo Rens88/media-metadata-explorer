@@ -6,4 +6,6 @@ pytest<9.0.0,>=8.0.0
 
 [ui]
 pandas<3.0.0,>=2.2.0
+folium<1.0.0,>=0.17.0
 streamlit<2.0.0,>=1.40.0
+streamlit-folium<1.0.0,>=0.23.0

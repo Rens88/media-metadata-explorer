@@ -59,7 +59,11 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     last_seen_at TIMESTAMP,
     parsed_datetime TIMESTAMP,
     parsed_pattern VARCHAR,
-    parse_confidence DOUBLE
+    parse_confidence DOUBLE,
+    video_duration_seconds DOUBLE,
+    video_codec VARCHAR,
+    video_fps DOUBLE,
+    video_bitrate BIGINT
 )
 """
 
@@ -98,9 +102,13 @@ INSERT OR REPLACE INTO {TABLE_NAME} (
     last_seen_at,
     parsed_datetime,
     parsed_pattern,
-    parse_confidence
+    parse_confidence,
+    video_duration_seconds,
+    video_codec,
+    video_fps,
+    video_bitrate
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 """
 
@@ -119,7 +127,13 @@ CREATE TABLE IF NOT EXISTS {SCANS_TABLE_NAME} (
     extraction_attempted BIGINT NOT NULL,
     extraction_successful BIGINT NOT NULL,
     extraction_failed BIGINT NOT NULL,
-    dry_run BOOLEAN NOT NULL
+    dry_run BOOLEAN NOT NULL,
+    image_extraction_attempted BIGINT NOT NULL DEFAULT 0,
+    image_extraction_successful BIGINT NOT NULL DEFAULT 0,
+    image_extraction_failed BIGINT NOT NULL DEFAULT 0,
+    video_extraction_attempted BIGINT NOT NULL DEFAULT 0,
+    video_extraction_successful BIGINT NOT NULL DEFAULT 0,
+    video_extraction_failed BIGINT NOT NULL DEFAULT 0
 )
 """
 
@@ -138,8 +152,14 @@ INSERT INTO {SCANS_TABLE_NAME} (
     extraction_attempted,
     extraction_successful,
     extraction_failed,
-    dry_run
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    dry_run,
+    image_extraction_attempted,
+    image_extraction_successful,
+    image_extraction_failed,
+    video_extraction_attempted,
+    video_extraction_successful,
+    video_extraction_failed
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 CREATE_THUMBNAILS_TABLE_SQL = f"""
@@ -171,6 +191,10 @@ FILE_METADATA_MIGRATIONS = [
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS file_state VARCHAR",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS first_seen_at TIMESTAMP",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_duration_seconds DOUBLE",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_codec VARCHAR",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_fps DOUBLE",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_bitrate BIGINT",
 ]
 
 THUMBNAILS_TABLE_MIGRATIONS = [
@@ -180,6 +204,15 @@ THUMBNAILS_TABLE_MIGRATIONS = [
     f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS status VARCHAR",
     f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS error VARCHAR",
     f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS generated_at TIMESTAMP",
+]
+
+SCANS_TABLE_MIGRATIONS = [
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS image_extraction_attempted BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS image_extraction_successful BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS image_extraction_failed BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS video_extraction_attempted BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS video_extraction_successful BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS video_extraction_failed BIGINT",
 ]
 
 
@@ -203,6 +236,20 @@ class DuckDBStore:
                 """
             )
             conn.execute(CREATE_SCANS_TABLE_SQL)
+            for migration_sql in SCANS_TABLE_MIGRATIONS:
+                conn.execute(migration_sql)
+            conn.execute(
+                f"""
+                UPDATE {SCANS_TABLE_NAME}
+                SET
+                    image_extraction_attempted = COALESCE(image_extraction_attempted, 0),
+                    image_extraction_successful = COALESCE(image_extraction_successful, 0),
+                    image_extraction_failed = COALESCE(image_extraction_failed, 0),
+                    video_extraction_attempted = COALESCE(video_extraction_attempted, 0),
+                    video_extraction_successful = COALESCE(video_extraction_successful, 0),
+                    video_extraction_failed = COALESCE(video_extraction_failed, 0)
+                """
+            )
             conn.execute(CREATE_THUMBNAILS_TABLE_SQL)
             for migration_sql in THUMBNAILS_TABLE_MIGRATIONS:
                 conn.execute(migration_sql)
@@ -516,7 +563,13 @@ class DuckDBStore:
                             extraction_attempted,
                             extraction_successful,
                             extraction_failed,
-                            dry_run
+                            dry_run,
+                            image_extraction_attempted,
+                            image_extraction_successful,
+                            image_extraction_failed,
+                            video_extraction_attempted,
+                            video_extraction_successful,
+                            video_extraction_failed
                         FROM {SCANS_TABLE_NAME}
                         WHERE scan_id = ?
                         """,
@@ -539,7 +592,13 @@ class DuckDBStore:
                             extraction_attempted,
                             extraction_successful,
                             extraction_failed,
-                            dry_run
+                            dry_run,
+                            image_extraction_attempted,
+                            image_extraction_successful,
+                            image_extraction_failed,
+                            video_extraction_attempted,
+                            video_extraction_successful,
+                            video_extraction_failed
                         FROM {SCANS_TABLE_NAME}
                         ORDER BY finished_at DESC
                         LIMIT 1
@@ -566,6 +625,12 @@ class DuckDBStore:
             extraction_successful=int(row[11]),
             extraction_failed=int(row[12]),
             dry_run=bool(row[13]),
+            image_extraction_attempted=int(row[14]),
+            image_extraction_successful=int(row[15]),
+            image_extraction_failed=int(row[16]),
+            video_extraction_attempted=int(row[17]),
+            video_extraction_successful=int(row[18]),
+            video_extraction_failed=int(row[19]),
         )
 
     def get_failed_files(self, scan_id: str, limit: int = 50) -> list[FailedFileRecord]:

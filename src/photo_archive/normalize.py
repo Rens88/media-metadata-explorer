@@ -48,6 +48,7 @@ def normalize_record(
     last_seen_at: datetime | None,
 ) -> NormalizedRecord:
     raw_metadata = extraction.raw_metadata if extraction and extraction.raw_metadata else {}
+    video_stream = _first_video_stream(raw_metadata) if scan_record.media_type == "video" else None
 
     captured_at, captured_at_source = choose_best_timestamp(
         raw_metadata=raw_metadata,
@@ -55,6 +56,11 @@ def normalize_record(
         fs_created_at=scan_record.fs_created_at,
         fs_modified_at=scan_record.fs_modified_at,
     )
+    if captured_at is None and scan_record.media_type == "video":
+        video_created_at = _extract_video_created_at(raw_metadata)
+        if video_created_at is not None:
+            captured_at = video_created_at
+            captured_at_source = "ffprobe:creation_time"
 
     extract_status, extract_error = derive_extract_status(scan_record, extraction)
 
@@ -81,8 +87,12 @@ def normalize_record(
         camera_model=_extract_string(raw_metadata, MODEL_TAGS),
         lens_model=_extract_string(raw_metadata, LENS_TAGS),
         software=_extract_string(raw_metadata, SOFTWARE_TAGS),
-        width=_extract_int(raw_metadata, WIDTH_TAGS),
-        height=_extract_int(raw_metadata, HEIGHT_TAGS),
+        width=_extract_video_dimension(video_stream, key="width")
+        if scan_record.media_type == "video"
+        else _extract_int(raw_metadata, WIDTH_TAGS),
+        height=_extract_video_dimension(video_stream, key="height")
+        if scan_record.media_type == "video"
+        else _extract_int(raw_metadata, HEIGHT_TAGS),
         orientation=_extract_string(raw_metadata, ORIENTATION_TAGS),
         raw_metadata_json=(
             json.dumps(raw_metadata, ensure_ascii=False, sort_keys=True)
@@ -97,6 +107,10 @@ def normalize_record(
         parsed_datetime=filename_parse.parsed_datetime,
         parsed_pattern=filename_parse.parsed_pattern,
         parse_confidence=filename_parse.parse_confidence,
+        video_duration_seconds=_extract_video_duration_seconds(raw_metadata),
+        video_codec=_extract_video_codec(video_stream),
+        video_fps=_extract_video_fps(video_stream),
+        video_bitrate=_extract_video_bitrate(raw_metadata, video_stream),
     )
 
 
@@ -192,6 +206,145 @@ def _extract_float(raw_metadata: dict[str, Any], candidate_tags: list[str]) -> f
 
 def _extract_int(raw_metadata: dict[str, Any], candidate_tags: list[str]) -> int | None:
     value, _ = _extract_value_with_source(raw_metadata, candidate_tags)
+    if value is None:
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _first_video_stream(raw_metadata: dict[str, Any]) -> dict[str, Any] | None:
+    streams = raw_metadata.get("streams")
+    if not isinstance(streams, list):
+        return None
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        if str(stream.get("codec_type", "")).lower() == "video":
+            return stream
+    for stream in streams:
+        if isinstance(stream, dict):
+            return stream
+    return None
+
+
+def _extract_video_dimension(video_stream: dict[str, Any] | None, *, key: str) -> int | None:
+    if not video_stream:
+        return None
+    value = video_stream.get(key)
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_video_duration_seconds(raw_metadata: dict[str, Any]) -> float | None:
+    format_node = raw_metadata.get("format")
+    if isinstance(format_node, dict):
+        value = format_node.get("duration")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            pass
+
+    stream = _first_video_stream(raw_metadata)
+    if stream:
+        value = stream.get("duration")
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _extract_video_codec(video_stream: dict[str, Any] | None) -> str | None:
+    if not video_stream:
+        return None
+    value = video_stream.get("codec_name") or video_stream.get("codec_long_name")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _extract_video_fps(video_stream: dict[str, Any] | None) -> float | None:
+    if not video_stream:
+        return None
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        value = video_stream.get(key)
+        fps = _parse_ffprobe_rate(value)
+        if fps is not None:
+            return fps
+    return None
+
+
+def _parse_ffprobe_rate(value: Any) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            parsed = float(value)
+            return parsed if parsed > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    if "/" in text:
+        numerator, denominator = text.split("/", 1)
+        try:
+            num = float(numerator)
+            den = float(denominator)
+            if den == 0:
+                return None
+            parsed = num / den
+            return parsed if parsed > 0 else None
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        parsed = float(text)
+        return parsed if parsed > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _extract_video_bitrate(
+    raw_metadata: dict[str, Any],
+    video_stream: dict[str, Any] | None,
+) -> int | None:
+    format_node = raw_metadata.get("format")
+    if isinstance(format_node, dict):
+        value = format_node.get("bit_rate")
+        parsed = _coerce_int(value)
+        if parsed is not None:
+            return parsed
+
+    if video_stream:
+        return _coerce_int(video_stream.get("bit_rate"))
+    return None
+
+
+def _extract_video_created_at(raw_metadata: dict[str, Any]) -> datetime | None:
+    format_node = raw_metadata.get("format")
+    if isinstance(format_node, dict):
+        tags = format_node.get("tags")
+        if isinstance(tags, dict):
+            parsed = _coerce_datetime(tags.get("creation_time"))
+            if parsed is not None:
+                return parsed
+
+    stream = _first_video_stream(raw_metadata)
+    if stream:
+        tags = stream.get("tags")
+        if isinstance(tags, dict):
+            return _coerce_datetime(tags.get("creation_time"))
+    return None
+
+
+def _coerce_int(value: Any) -> int | None:
     if value is None:
         return None
     try:

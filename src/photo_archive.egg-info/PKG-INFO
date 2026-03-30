@@ -10,7 +10,9 @@ Provides-Extra: dev
 Requires-Dist: pytest<9.0.0,>=8.0.0; extra == "dev"
 Provides-Extra: ui
 Requires-Dist: pandas<3.0.0,>=2.2.0; extra == "ui"
+Requires-Dist: folium<1.0.0,>=0.17.0; extra == "ui"
 Requires-Dist: streamlit<2.0.0,>=1.40.0; extra == "ui"
+Requires-Dist: streamlit-folium<1.0.0,>=0.23.0; extra == "ui"
 
 # Media Metadata Explorer
 
@@ -141,6 +143,7 @@ The report command prints:
 - latest scan summary
 - changed/new/missing counts
 - failed files list
+- thumbnail status counts and failed thumbnail list
 - non-null coverage by column
 
 Optional flags:
@@ -197,6 +200,14 @@ What it shows:
 - least-populated fields
 - sample rows for quick inspection
 - thumbnail status counts and a live gallery preview (when `thumbnails` exists)
+- filterable media table (state/status/extension/text) joined with thumbnails
+- date/folder/device/GPS filters for focused local exploration
+- pagination controls and sortable filtered results for large collections
+- filter-synced timeline chart (day/month/year buckets with line/bar toggle)
+- filter-synced map preview with GPS point cap and location summary
+- draw-a-box map selection to apply lon/lat bounding filters
+- one-click filter reset and filtered export to CSV/Parquet
+- filtered gallery preview from current query results
 
 ## Incremental Indexing Notes
 

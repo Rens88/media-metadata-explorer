@@ -9,6 +9,7 @@ from uuid import uuid4
 from photo_archive.config import normalize_extensions
 from photo_archive.database import DuckDBStore
 from photo_archive.extractors.exiftool_extractor import ExifToolExtractor
+from photo_archive.extractors.ffprobe_extractor import FFprobeExtractor
 from photo_archive.extractors.filename_parser import parse_filename_datetime
 from photo_archive.incremental import classify_incremental_state
 from photo_archive.models import (
@@ -109,27 +110,39 @@ def run_pipeline(
     )
 
     extraction_by_path: dict[str, ExtractionResult] = {}
-    candidate_supported_paths = [
-        Path(record.path)
+    candidate_supported_records = [
+        record
         for record in scan_records
         if record.is_supported and _should_extract(record.path, incremental.state_by_path, full_rescan)
     ]
-    extraction_attempted = len(candidate_supported_paths)
+    candidate_image_paths = [
+        Path(record.path) for record in candidate_supported_records if record.media_type == "image"
+    ]
+    candidate_video_paths = [
+        Path(record.path) for record in candidate_supported_records if record.media_type == "video"
+    ]
+    extraction_attempted = len(candidate_supported_records)
 
     progress_printer.start(
         topic="EXTRACT",
-        purpose="run ExifTool on target files",
+        purpose="run ExifTool/ffprobe on target files",
         expectation=(
             "incremental should target fewer files than full_rescan on repeat runs"
             if not full_rescan
             else "full_rescan refreshes all supported files"
         ),
-        details=f"candidate_files={extraction_attempted}",
+        details=(
+            f"candidate_files={extraction_attempted}, "
+            f"image_candidates={len(candidate_image_paths)}, "
+            f"video_candidates={len(candidate_video_paths)}"
+        ),
     )
     extraction_duration_seconds = 0.0
     if not dry_run:
-        extractor = ExifToolExtractor(batch_size=exif_batch_size)
-        extraction_by_path = extractor.extract(candidate_supported_paths)
+        image_extractor = ExifToolExtractor(batch_size=exif_batch_size)
+        video_extractor = FFprobeExtractor()
+        extraction_by_path.update(image_extractor.extract(candidate_image_paths))
+        extraction_by_path.update(video_extractor.extract(candidate_video_paths))
     extraction_duration_seconds = progress_printer.done(
         "EXTRACT",
         details=(
@@ -232,6 +245,33 @@ def run_pipeline(
     extraction_failed = sum(
         1 for item in extraction_by_path.values() if item.status != "success"
     )
+    image_extraction_attempted = len(candidate_image_paths)
+    image_extraction_successful = sum(
+        1
+        for path in candidate_image_paths
+        if extraction_by_path.get(str(path.resolve(strict=False))) is not None
+        and extraction_by_path[str(path.resolve(strict=False))].status == "success"
+    )
+    image_extraction_failed = sum(
+        1
+        for path in candidate_image_paths
+        if extraction_by_path.get(str(path.resolve(strict=False))) is not None
+        and extraction_by_path[str(path.resolve(strict=False))].status != "success"
+    )
+
+    video_extraction_attempted = len(candidate_video_paths)
+    video_extraction_successful = sum(
+        1
+        for path in candidate_video_paths
+        if extraction_by_path.get(str(path.resolve(strict=False))) is not None
+        and extraction_by_path[str(path.resolve(strict=False))].status == "success"
+    )
+    video_extraction_failed = sum(
+        1
+        for path in candidate_video_paths
+        if extraction_by_path.get(str(path.resolve(strict=False))) is not None
+        and extraction_by_path[str(path.resolve(strict=False))].status != "success"
+    )
     summary = build_run_summary(
         normalized_records,
         new_files=incremental.new_files,
@@ -250,6 +290,12 @@ def run_pipeline(
         persist_duration_seconds=persist_duration_seconds,
         persist_upserted=persist_upserted,
         persist_touched_unchanged=persist_touched,
+        image_extraction_attempted=image_extraction_attempted,
+        image_extraction_successful=image_extraction_successful,
+        image_extraction_failed=image_extraction_failed,
+        video_extraction_attempted=video_extraction_attempted,
+        video_extraction_successful=video_extraction_successful,
+        video_extraction_failed=video_extraction_failed,
     )
     finished_at = datetime.now(timezone.utc)
     run_duration_seconds = perf_counter() - run_started_clock
@@ -271,6 +317,12 @@ def run_pipeline(
             extraction_successful=summary.get("extraction_successful", 0),
             extraction_failed=summary.get("extraction_failed", 0),
             dry_run=dry_run,
+            image_extraction_attempted=summary.get("image_extraction_attempted", 0),
+            image_extraction_successful=summary.get("image_extraction_successful", 0),
+            image_extraction_failed=summary.get("image_extraction_failed", 0),
+            video_extraction_attempted=summary.get("video_extraction_attempted", 0),
+            video_extraction_successful=summary.get("video_extraction_successful", 0),
+            video_extraction_failed=summary.get("video_extraction_failed", 0),
         )
         store.insert_scan_history(history)
 

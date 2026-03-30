@@ -74,6 +74,10 @@ class NormalizedRecord:
     parsed_datetime: datetime | None
     parsed_pattern: str | None
     parse_confidence: float | None
+    video_duration_seconds: float | None = None
+    video_codec: str | None = None
+    video_fps: float | None = None
+    video_bitrate: int | None = None
 
 
 @dataclass(slots=True)
@@ -111,6 +115,12 @@ class ScanHistoryRecord:
     extraction_successful: int
     extraction_failed: int
     dry_run: bool
+    image_extraction_attempted: int = 0
+    image_extraction_successful: int = 0
+    image_extraction_failed: int = 0
+    video_extraction_attempted: int = 0
+    video_extraction_successful: int = 0
+    video_extraction_failed: int = 0
 
 
 @dataclass(slots=True)
@@ -147,6 +157,14 @@ class FailedThumbnailRecord:
     thumb_path: str | None
     status: str
     error: str | None
+
+
+@dataclass(slots=True)
+class MediaExtractionStatRecord:
+    media_type: str
+    attempted: int
+    successful: int
+    failed: int
 
 
 @dataclass(slots=True)

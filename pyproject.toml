@@ -19,7 +19,9 @@ dev = [
 ]
 ui = [
   "pandas>=2.2.0,<3.0.0",
+  "folium>=0.17.0,<1.0.0",
   "streamlit>=1.40.0,<2.0.0",
+  "streamlit-folium>=0.23.0,<1.0.0",
 ]
 
 [project.scripts]

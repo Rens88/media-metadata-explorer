@@ -188,6 +188,9 @@ What it shows:
 - date/folder/device/GPS filters for focused local exploration
 - pagination controls and sortable filtered results for large collections
 - filter-synced timeline chart (day/month/year buckets with line/bar toggle)
+- filter-synced map preview with GPS point cap and location summary
+- draw-a-box map selection to apply lon/lat bounding filters
+- one-click filter reset and filtered export to CSV/Parquet
 - filtered gallery preview from current query results
 
 ## Incremental Indexing Notes

@@ -34,6 +34,12 @@ def build_run_summary(
     persist_duration_seconds: float = 0.0,
     persist_upserted: int = 0,
     persist_touched_unchanged: int = 0,
+    image_extraction_attempted: int = 0,
+    image_extraction_successful: int = 0,
+    image_extraction_failed: int = 0,
+    video_extraction_attempted: int = 0,
+    video_extraction_successful: int = 0,
+    video_extraction_failed: int = 0,
 ) -> dict[str, Any]:
     files_discovered = len(records)
     supported_records = [record for record in records if record.is_supported]
@@ -90,6 +96,12 @@ def build_run_summary(
         "persist_duration_seconds": persist_duration_seconds,
         "persist_upserted": persist_upserted,
         "persist_touched_unchanged": persist_touched_unchanged,
+        "image_extraction_attempted": image_extraction_attempted,
+        "image_extraction_successful": image_extraction_successful,
+        "image_extraction_failed": image_extraction_failed,
+        "video_extraction_attempted": video_extraction_attempted,
+        "video_extraction_successful": video_extraction_successful,
+        "video_extraction_failed": video_extraction_failed,
     }
 
 
@@ -129,6 +141,18 @@ def format_run_summary(summary: dict[str, Any]) -> str:
         lines.append(f"Extraction attempts this run: {summary['extraction_attempted']}")
         lines.append(f"Extraction successes this run: {summary.get('extraction_successful', 0)}")
         lines.append(f"Extraction failures this run: {summary.get('extraction_failed', 0)}")
+        lines.append(
+            "Image extraction this run: "
+            f"attempted={summary.get('image_extraction_attempted', 0)}, "
+            f"successful={summary.get('image_extraction_successful', 0)}, "
+            f"failed={summary.get('image_extraction_failed', 0)}"
+        )
+        lines.append(
+            "Video extraction this run: "
+            f"attempted={summary.get('video_extraction_attempted', 0)}, "
+            f"successful={summary.get('video_extraction_successful', 0)}, "
+            f"failed={summary.get('video_extraction_failed', 0)}"
+        )
         if summary.get("full_rescan"):
             lines.append("Rescan mode: full_rescan")
         else:
@@ -227,6 +251,21 @@ def format_cli_report(
     lines.append(f"  attempted: {scan.extraction_attempted}")
     lines.append(f"  successful: {scan.extraction_successful}")
     lines.append(f"  failed: {scan.extraction_failed}")
+    lines.append("")
+
+    lines.append("Media extraction stats")
+    lines.append(
+        "  image:"
+        f" attempted={scan.image_extraction_attempted},"
+        f" successful={scan.image_extraction_successful},"
+        f" failed={scan.image_extraction_failed}"
+    )
+    lines.append(
+        "  video:"
+        f" attempted={scan.video_extraction_attempted},"
+        f" successful={scan.video_extraction_successful},"
+        f" failed={scan.video_extraction_failed}"
+    )
     lines.append("")
 
     lines.append(f"Failed files (up to {failed_limit})")
