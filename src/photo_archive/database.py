@@ -8,13 +8,19 @@ from typing import Literal
 import duckdb
 
 from photo_archive.models import (
+    BackupAuditFileRecord,
     ColumnCoverageRecord,
     ExistingFileIndexRecord,
     ExtensionCountRecord,
+    FileScanRecord,
+    FailedVideoFrameRecord,
     FailedThumbnailRecord,
     FailedFileRecord,
     NormalizedRecord,
     ScanHistoryRecord,
+    VideoFrameStatusCountRecord,
+    VideoFrameRecord,
+    VideoFrameSourceRecord,
     ThumbnailStatusCountRecord,
     ThumbnailRecord,
     ThumbnailSourceRecord,
@@ -23,6 +29,7 @@ from photo_archive.models import (
 TABLE_NAME = "file_metadata"
 SCANS_TABLE_NAME = "scans"
 THUMBNAILS_TABLE_NAME = "thumbnails"
+VIDEO_FRAMES_TABLE_NAME = "video_frames"
 
 CREATE_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
@@ -63,7 +70,11 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
     video_duration_seconds DOUBLE,
     video_codec VARCHAR,
     video_fps DOUBLE,
-    video_bitrate BIGINT
+    video_bitrate BIGINT,
+    content_sha256 VARCHAR,
+    hash_status VARCHAR,
+    hash_error VARCHAR,
+    hash_at TIMESTAMP
 )
 """
 
@@ -106,9 +117,13 @@ INSERT OR REPLACE INTO {TABLE_NAME} (
     video_duration_seconds,
     video_codec,
     video_fps,
-    video_bitrate
+    video_bitrate,
+    content_sha256,
+    hash_status,
+    hash_error,
+    hash_at
 ) VALUES (
-    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 )
 """
 
@@ -133,7 +148,10 @@ CREATE TABLE IF NOT EXISTS {SCANS_TABLE_NAME} (
     image_extraction_failed BIGINT NOT NULL DEFAULT 0,
     video_extraction_attempted BIGINT NOT NULL DEFAULT 0,
     video_extraction_successful BIGINT NOT NULL DEFAULT 0,
-    video_extraction_failed BIGINT NOT NULL DEFAULT 0
+    video_extraction_failed BIGINT NOT NULL DEFAULT 0,
+    hash_attempted BIGINT NOT NULL DEFAULT 0,
+    hash_successful BIGINT NOT NULL DEFAULT 0,
+    hash_failed BIGINT NOT NULL DEFAULT 0
 )
 """
 
@@ -158,8 +176,11 @@ INSERT INTO {SCANS_TABLE_NAME} (
     image_extraction_failed,
     video_extraction_attempted,
     video_extraction_successful,
-    video_extraction_failed
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    video_extraction_failed,
+    hash_attempted,
+    hash_successful,
+    hash_failed
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 CREATE_THUMBNAILS_TABLE_SQL = f"""
@@ -186,6 +207,35 @@ INSERT OR REPLACE INTO {THUMBNAILS_TABLE_NAME} (
 ) VALUES (?, ?, ?, ?, ?, ?, ?)
 """
 
+CREATE_VIDEO_FRAMES_TABLE_SQL = f"""
+CREATE TABLE IF NOT EXISTS {VIDEO_FRAMES_TABLE_NAME} (
+    file_id VARCHAR NOT NULL,
+    frame_index INTEGER NOT NULL,
+    frame_time_sec DOUBLE NOT NULL,
+    frame_path VARCHAR,
+    width INTEGER,
+    height INTEGER,
+    status VARCHAR NOT NULL,
+    error VARCHAR,
+    generated_at TIMESTAMP NOT NULL,
+    PRIMARY KEY (file_id, frame_index)
+)
+"""
+
+INSERT_VIDEO_FRAME_SQL = f"""
+INSERT OR REPLACE INTO {VIDEO_FRAMES_TABLE_NAME} (
+    file_id,
+    frame_index,
+    frame_time_sec,
+    frame_path,
+    width,
+    height,
+    status,
+    error,
+    generated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
 FILE_METADATA_MIGRATIONS = [
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS scan_id VARCHAR",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS file_state VARCHAR",
@@ -195,6 +245,10 @@ FILE_METADATA_MIGRATIONS = [
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_codec VARCHAR",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_fps DOUBLE",
     f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS video_bitrate BIGINT",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS content_sha256 VARCHAR",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS hash_status VARCHAR",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS hash_error VARCHAR",
+    f"ALTER TABLE {TABLE_NAME} ADD COLUMN IF NOT EXISTS hash_at TIMESTAMP",
 ]
 
 THUMBNAILS_TABLE_MIGRATIONS = [
@@ -206,6 +260,18 @@ THUMBNAILS_TABLE_MIGRATIONS = [
     f"ALTER TABLE {THUMBNAILS_TABLE_NAME} ADD COLUMN IF NOT EXISTS generated_at TIMESTAMP",
 ]
 
+VIDEO_FRAMES_TABLE_MIGRATIONS = [
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS file_id VARCHAR",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS frame_index INTEGER",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS frame_time_sec DOUBLE",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS frame_path VARCHAR",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS width INTEGER",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS height INTEGER",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS status VARCHAR",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS error VARCHAR",
+    f"ALTER TABLE {VIDEO_FRAMES_TABLE_NAME} ADD COLUMN IF NOT EXISTS generated_at TIMESTAMP",
+]
+
 SCANS_TABLE_MIGRATIONS = [
     f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS image_extraction_attempted BIGINT",
     f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS image_extraction_successful BIGINT",
@@ -213,6 +279,9 @@ SCANS_TABLE_MIGRATIONS = [
     f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS video_extraction_attempted BIGINT",
     f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS video_extraction_successful BIGINT",
     f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS video_extraction_failed BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS hash_attempted BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS hash_successful BIGINT",
+    f"ALTER TABLE {SCANS_TABLE_NAME} ADD COLUMN IF NOT EXISTS hash_failed BIGINT",
 ]
 
 
@@ -247,7 +316,10 @@ class DuckDBStore:
                     image_extraction_failed = COALESCE(image_extraction_failed, 0),
                     video_extraction_attempted = COALESCE(video_extraction_attempted, 0),
                     video_extraction_successful = COALESCE(video_extraction_successful, 0),
-                    video_extraction_failed = COALESCE(video_extraction_failed, 0)
+                    video_extraction_failed = COALESCE(video_extraction_failed, 0),
+                    hash_attempted = COALESCE(hash_attempted, 0),
+                    hash_successful = COALESCE(hash_successful, 0),
+                    hash_failed = COALESCE(hash_failed, 0)
                 """
             )
             conn.execute(CREATE_THUMBNAILS_TABLE_SQL)
@@ -256,6 +328,17 @@ class DuckDBStore:
             conn.execute(
                 f"""
                 UPDATE {THUMBNAILS_TABLE_NAME}
+                SET
+                    status = COALESCE(status, 'unknown'),
+                    generated_at = COALESCE(generated_at, NOW())
+                """
+            )
+            conn.execute(CREATE_VIDEO_FRAMES_TABLE_SQL)
+            for migration_sql in VIDEO_FRAMES_TABLE_MIGRATIONS:
+                conn.execute(migration_sql)
+            conn.execute(
+                f"""
+                UPDATE {VIDEO_FRAMES_TABLE_NAME}
                 SET
                     status = COALESCE(status, 'unknown'),
                     generated_at = COALESCE(generated_at, NOW())
@@ -274,15 +357,45 @@ class DuckDBStore:
         scan_root: str,
         scan_id: str,
         scan_time: datetime,
-        paths: list[str],
+        records: list[FileScanRecord],
     ) -> int:
         """Lightweight update for unchanged files to avoid full row upserts."""
-        if not paths:
+        if not records:
             return 0
-        path_rows = [(path,) for path in paths]
+        touch_rows = [
+            (
+                record.path,
+                record.extension,
+                record.media_type,
+                bool(record.is_supported),
+                record.size_bytes,
+                record.fs_created_at,
+                record.fs_modified_at,
+                record.parent_folder,
+                record.filename,
+            )
+            for record in records
+        ]
         with duckdb.connect(str(self.db_path)) as conn:
-            conn.execute("CREATE TEMP TABLE _touch_paths(path VARCHAR)")
-            conn.executemany("INSERT INTO _touch_paths VALUES (?)", path_rows)
+            conn.execute(
+                """
+                CREATE TEMP TABLE _touch_rows(
+                    path VARCHAR,
+                    extension VARCHAR,
+                    media_type VARCHAR,
+                    is_supported BOOLEAN,
+                    size_bytes BIGINT,
+                    fs_created_at TIMESTAMP,
+                    fs_modified_at TIMESTAMP,
+                    parent_folder VARCHAR,
+                    filename VARCHAR
+                )
+                """
+            )
+            conn.executemany(
+                "INSERT INTO _touch_rows VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                touch_rows,
+            )
             conn.execute(
                 f"""
                 UPDATE {TABLE_NAME} AS f
@@ -290,14 +403,22 @@ class DuckDBStore:
                     scan_id = ?,
                     scan_time = ?,
                     file_state = 'unchanged',
-                    last_seen_at = ?
-                FROM _touch_paths AS t
+                    last_seen_at = ?,
+                    extension = t.extension,
+                    media_type = t.media_type,
+                    is_supported = t.is_supported,
+                    size_bytes = COALESCE(t.size_bytes, f.size_bytes),
+                    fs_created_at = COALESCE(t.fs_created_at, f.fs_created_at),
+                    fs_modified_at = COALESCE(t.fs_modified_at, f.fs_modified_at),
+                    parent_folder = COALESCE(t.parent_folder, f.parent_folder),
+                    filename = COALESCE(t.filename, f.filename)
+                FROM _touch_rows AS t
                 WHERE f.path = t.path
                   AND f.scan_root = ?
                 """,
                 [scan_id, scan_time, scan_time, scan_root],
             )
-        return len(paths)
+        return len(records)
 
     def load_existing_records(self, scan_root: str) -> dict[str, ExistingFileIndexRecord]:
         if not self.db_path.exists():
@@ -321,7 +442,11 @@ class DuckDBStore:
                         captured_at,
                         gps_lat,
                         gps_lon,
-                        camera_model
+                        camera_model,
+                        content_sha256,
+                        hash_status,
+                        hash_error,
+                        hash_at
                     FROM {TABLE_NAME}
                     WHERE scan_root = ?
                     """,
@@ -347,6 +472,10 @@ class DuckDBStore:
                 gps_lat=float(row[12]) if row[12] is not None else None,
                 gps_lon=float(row[13]) if row[13] is not None else None,
                 camera_model=row[14],
+                content_sha256=row[15],
+                hash_status=row[16],
+                hash_error=row[17],
+                hash_at=_coerce_datetime(row[18]),
             )
         return output
 
@@ -360,6 +489,7 @@ class DuckDBStore:
                     SELECT
                         file_id,
                         path,
+                        media_type,
                         file_state,
                         is_supported,
                         extract_status
@@ -375,9 +505,10 @@ class DuckDBStore:
             ThumbnailSourceRecord(
                 file_id=row[0],
                 path=row[1],
-                file_state=row[2],
-                is_supported=bool(row[3]),
-                extract_status=row[4],
+                media_type=row[2],
+                file_state=row[3],
+                is_supported=bool(row[4]),
+                extract_status=row[5],
             )
             for row in rows
         ]
@@ -436,6 +567,7 @@ class DuckDBStore:
                     LEFT JOIN {TABLE_NAME} AS f
                       ON f.file_id = t.file_id
                      AND COALESCE(f.file_state, '') <> 'missing'
+                     AND COALESCE(f.media_type, 'image') IN ('image', 'video')
                     WHERE f.file_id IS NULL
                     """
                 ).fetchall()
@@ -487,6 +619,165 @@ class DuckDBStore:
             return
         with duckdb.connect(str(self.db_path)) as conn:
             conn.executemany(INSERT_THUMBNAIL_SQL, [astuple(record) for record in records])
+
+    def load_video_frame_sources(self) -> list[VideoFrameSourceRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        path,
+                        media_type,
+                        file_state,
+                        is_supported,
+                        extract_status,
+                        video_duration_seconds
+                    FROM {TABLE_NAME}
+                    WHERE COALESCE(file_state, '') <> 'missing'
+                      AND COALESCE(media_type, '') = 'video'
+                    ORDER BY path
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        output: list[VideoFrameSourceRecord] = []
+        for row in rows:
+            output.append(
+                VideoFrameSourceRecord(
+                    file_id=row[0],
+                    path=row[1],
+                    media_type=row[2],
+                    file_state=row[3],
+                    is_supported=bool(row[4]),
+                    extract_status=row[5],
+                    video_duration_seconds=float(row[6]) if row[6] is not None else None,
+                )
+            )
+        return output
+
+    def load_video_frames_by_key(self) -> dict[tuple[str, int], VideoFrameRecord]:
+        if not self.db_path.exists():
+            return {}
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        frame_index,
+                        frame_time_sec,
+                        frame_path,
+                        width,
+                        height,
+                        status,
+                        error,
+                        generated_at
+                    FROM {VIDEO_FRAMES_TABLE_NAME}
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return {}
+
+        output: dict[tuple[str, int], VideoFrameRecord] = {}
+        for row in rows:
+            file_id = row[0]
+            frame_index = int(row[1]) if row[1] is not None else 0
+            frame_time_sec = float(row[2]) if row[2] is not None else 0.0
+            generated_at = _coerce_datetime(row[8]) or datetime.now(timezone.utc)
+            output[(file_id, frame_index)] = VideoFrameRecord(
+                file_id=file_id,
+                frame_index=frame_index,
+                frame_time_sec=frame_time_sec,
+                frame_path=row[3],
+                width=int(row[4]) if row[4] is not None else None,
+                height=int(row[5]) if row[5] is not None else None,
+                status=row[6] or "unknown",
+                error=row[7],
+                generated_at=generated_at,
+            )
+        return output
+
+    def upsert_video_frame_records(self, records: list[VideoFrameRecord]) -> None:
+        if not records:
+            return
+        with duckdb.connect(str(self.db_path)) as conn:
+            conn.executemany(INSERT_VIDEO_FRAME_SQL, [astuple(record) for record in records])
+
+    def load_stale_video_frames(self) -> list[VideoFrameRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        vf.file_id,
+                        vf.frame_index,
+                        vf.frame_time_sec,
+                        vf.frame_path,
+                        vf.width,
+                        vf.height,
+                        vf.status,
+                        vf.error,
+                        vf.generated_at
+                    FROM {VIDEO_FRAMES_TABLE_NAME} AS vf
+                    LEFT JOIN {TABLE_NAME} AS f
+                      ON f.file_id = vf.file_id
+                     AND COALESCE(f.file_state, '') <> 'missing'
+                     AND COALESCE(f.media_type, '') = 'video'
+                    WHERE f.file_id IS NULL
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        output: list[VideoFrameRecord] = []
+        for row in rows:
+            output.append(
+                VideoFrameRecord(
+                    file_id=row[0],
+                    frame_index=int(row[1]) if row[1] is not None else 0,
+                    frame_time_sec=float(row[2]) if row[2] is not None else 0.0,
+                    frame_path=row[3],
+                    width=int(row[4]) if row[4] is not None else None,
+                    height=int(row[5]) if row[5] is not None else None,
+                    status=row[6] or "unknown",
+                    error=row[7],
+                    generated_at=_coerce_datetime(row[8]) or datetime.now(timezone.utc),
+                )
+            )
+        return output
+
+    def delete_video_frames_by_keys(self, keys: list[tuple[str, int]]) -> int:
+        if not keys:
+            return 0
+        with duckdb.connect(str(self.db_path)) as conn:
+            conn.execute("CREATE TEMP TABLE _frame_delete_keys(file_id VARCHAR, frame_index INTEGER)")
+            conn.executemany("INSERT INTO _frame_delete_keys VALUES (?, ?)", keys)
+            delete_count = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM {VIDEO_FRAMES_TABLE_NAME} AS vf
+                    INNER JOIN _frame_delete_keys AS d
+                      ON d.file_id = vf.file_id
+                     AND d.frame_index = vf.frame_index
+                    """
+                ).fetchone()[0]
+            )
+            conn.execute(
+                f"""
+                DELETE FROM {VIDEO_FRAMES_TABLE_NAME} AS vf
+                USING _frame_delete_keys AS d
+                WHERE vf.file_id = d.file_id
+                  AND vf.frame_index = d.frame_index
+                """
+            )
+        return delete_count
 
     def mark_missing_files(
         self,
@@ -551,12 +842,20 @@ class DuckDBStore:
             "new_files, changed_files, unchanged_files, missing_files, extraction_attempted, "
             "extraction_successful, extraction_failed, dry_run, image_extraction_attempted, "
             "image_extraction_successful, image_extraction_failed, video_extraction_attempted, "
-            "video_extraction_successful, video_extraction_failed"
+            "video_extraction_successful, video_extraction_failed, "
+            "hash_attempted, hash_successful, hash_failed"
         )
         old_columns_select = (
             "scan_id, scan_root, started_at, finished_at, files_discovered, supported_files, "
             "new_files, changed_files, unchanged_files, missing_files, extraction_attempted, "
             "extraction_successful, extraction_failed, dry_run"
+        )
+        mid_columns_select = (
+            "scan_id, scan_root, started_at, finished_at, files_discovered, supported_files, "
+            "new_files, changed_files, unchanged_files, missing_files, extraction_attempted, "
+            "extraction_successful, extraction_failed, dry_run, image_extraction_attempted, "
+            "image_extraction_successful, image_extraction_failed, video_extraction_attempted, "
+            "video_extraction_successful, video_extraction_failed"
         )
 
         try:
@@ -569,11 +868,18 @@ class DuckDBStore:
             try:
                 with duckdb.connect(str(self.db_path)) as conn:
                     row = conn.execute(
-                        f"SELECT {old_columns_select} FROM {SCANS_TABLE_NAME} {order_or_where}",
+                        f"SELECT {mid_columns_select} FROM {SCANS_TABLE_NAME} {order_or_where}",
                         params,
                     ).fetchone()
             except duckdb.Error:
-                return None
+                try:
+                    with duckdb.connect(str(self.db_path)) as conn:
+                        row = conn.execute(
+                            f"SELECT {old_columns_select} FROM {SCANS_TABLE_NAME} {order_or_where}",
+                            params,
+                        ).fetchone()
+                except duckdb.Error:
+                    return None
 
         if row is None:
             return None
@@ -584,6 +890,9 @@ class DuckDBStore:
         video_attempted = int(row[17]) if len(row) > 17 and row[17] is not None else 0
         video_successful = int(row[18]) if len(row) > 18 and row[18] is not None else 0
         video_failed = int(row[19]) if len(row) > 19 and row[19] is not None else 0
+        hash_attempted = int(row[20]) if len(row) > 20 and row[20] is not None else 0
+        hash_successful = int(row[21]) if len(row) > 21 and row[21] is not None else 0
+        hash_failed = int(row[22]) if len(row) > 22 and row[22] is not None else 0
 
         return ScanHistoryRecord(
             scan_id=row[0],
@@ -606,6 +915,9 @@ class DuckDBStore:
             video_extraction_attempted=video_attempted,
             video_extraction_successful=video_successful,
             video_extraction_failed=video_failed,
+            hash_attempted=hash_attempted,
+            hash_successful=hash_successful,
+            hash_failed=hash_failed,
         )
 
     def get_failed_files(self, scan_id: str, limit: int = 50) -> list[FailedFileRecord]:
@@ -789,6 +1101,140 @@ class DuckDBStore:
                 thumb_path=row[1],
                 status=row[2] or "failed",
                 error=row[3],
+            )
+            for row in rows
+        ]
+
+    def get_video_frame_status_counts(self) -> list[VideoFrameStatusCountRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        COALESCE(NULLIF(status, ''), '[unknown]') AS status_label,
+                        COUNT(*) AS row_count
+                    FROM {VIDEO_FRAMES_TABLE_NAME}
+                    GROUP BY status_label
+                    ORDER BY row_count DESC, status_label ASC
+                    """
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        return [
+            VideoFrameStatusCountRecord(status=row[0], count=int(row[1]))
+            for row in rows
+        ]
+
+    def get_failed_video_frames(self, limit: int = 50) -> list[FailedVideoFrameRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        frame_index,
+                        frame_path,
+                        status,
+                        error
+                    FROM {VIDEO_FRAMES_TABLE_NAME}
+                    WHERE status = 'failed'
+                    ORDER BY generated_at DESC, file_id ASC, frame_index ASC
+                    LIMIT ?
+                    """,
+                    [int(limit)],
+                ).fetchall()
+        except duckdb.Error:
+            return []
+
+        return [
+            FailedVideoFrameRecord(
+                file_id=row[0],
+                frame_index=int(row[1]) if row[1] is not None else 0,
+                frame_path=row[2],
+                status=row[3] or "failed",
+                error=row[4],
+            )
+            for row in rows
+        ]
+
+    def get_latest_scan_id_for_root(self, scan_root: str) -> str | None:
+        if not self.db_path.exists():
+            return None
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                row = conn.execute(
+                    f"""
+                    SELECT scan_id
+                    FROM {SCANS_TABLE_NAME}
+                    WHERE scan_root = ?
+                    ORDER BY finished_at DESC, started_at DESC, scan_id DESC
+                    LIMIT 1
+                    """,
+                    [scan_root],
+                ).fetchone()
+        except duckdb.Error:
+            return None
+        if row is None:
+            return None
+        return str(row[0]) if row[0] is not None else None
+
+    def load_active_files_for_scan(
+        self,
+        *,
+        scan_id: str,
+        scan_root: str,
+    ) -> list[BackupAuditFileRecord]:
+        if not self.db_path.exists():
+            return []
+        try:
+            with duckdb.connect(str(self.db_path)) as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        file_id,
+                        path,
+                        size_bytes,
+                        content_sha256
+                    FROM {TABLE_NAME}
+                    WHERE scan_id = ?
+                      AND scan_root = ?
+                      AND COALESCE(file_state, '') <> 'missing'
+                    ORDER BY path
+                    """,
+                    [scan_id, scan_root],
+                ).fetchall()
+        except duckdb.Error:
+            try:
+                with duckdb.connect(str(self.db_path)) as conn:
+                    rows_no_hash = conn.execute(
+                        f"""
+                        SELECT
+                            file_id,
+                            path,
+                            size_bytes
+                        FROM {TABLE_NAME}
+                        WHERE scan_id = ?
+                          AND scan_root = ?
+                          AND COALESCE(file_state, '') <> 'missing'
+                        ORDER BY path
+                        """,
+                        [scan_id, scan_root],
+                    ).fetchall()
+            except duckdb.Error:
+                return []
+            rows = [(row[0], row[1], row[2], None) for row in rows_no_hash]
+
+        return [
+            BackupAuditFileRecord(
+                file_id=row[0],
+                path=row[1],
+                size_bytes=int(row[2]) if row[2] is not None else None,
+                content_sha256=row[3],
             )
             for row in rows
         ]

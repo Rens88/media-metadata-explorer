@@ -2,11 +2,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
+from PIL import Image, UnidentifiedImageError
 
 from photo_archive.database import DuckDBStore
 from photo_archive.models import ThumbnailRecord, ThumbnailSourceRecord
 from photo_archive.thumbnail_pipeline import (
     cleanup_stale_thumbnails,
+    generate_video_thumbnail,
+    generate_thumbnail,
     select_thumbnail_jobs,
     thumbnail_path_for_file_id,
 )
@@ -26,15 +29,16 @@ def test_select_thumbnail_jobs_incremental_rules(tmp_path: Path) -> None:
     out_dir_changed_path.write_bytes(b"legacy")
 
     source_records = [
-        ThumbnailSourceRecord("id-a", "/photos/a.jpg", "new", True, "success"),
-        ThumbnailSourceRecord("id-b", "/photos/b.jpg", "changed", True, "success"),
-        ThumbnailSourceRecord("id-c", "/photos/c.jpg", "unchanged", True, "success"),
-        ThumbnailSourceRecord("id-d", "/photos/d.jpg", "unchanged", True, "success"),
-        ThumbnailSourceRecord("id-e", "/photos/e.jpg", "unchanged", True, "success"),
-        ThumbnailSourceRecord("id-f", "/photos/f.jpg", "unchanged", False, "skipped_unsupported"),
-        ThumbnailSourceRecord("id-g", "/photos/g.jpg", "unchanged", True, "success"),
-        ThumbnailSourceRecord("id-h", "/photos/h.jpg", "unchanged", True, "success"),
-        ThumbnailSourceRecord("id-i", "/photos/i.jpg", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-a", "/photos/a.jpg", "image", "new", True, "success"),
+        ThumbnailSourceRecord("id-b", "/photos/b.jpg", "image", "changed", True, "success"),
+        ThumbnailSourceRecord("id-c", "/photos/c.jpg", "image", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-d", "/photos/d.jpg", "image", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-e", "/photos/e.jpg", "image", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-f", "/photos/f.jpg", "image", "unchanged", False, "skipped_unsupported"),
+        ThumbnailSourceRecord("id-g", "/photos/g.jpg", "image", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-h", "/photos/h.jpg", "image", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-i", "/photos/i.jpg", "image", "unchanged", True, "success"),
+        ThumbnailSourceRecord("id-v", "/photos/video.mp4", "video", "changed", True, "success"),
     ]
     existing_by_file_id = {
         "id-c": ThumbnailRecord(
@@ -91,7 +95,7 @@ def test_select_thumbnail_jobs_incremental_rules(tmp_path: Path) -> None:
     )
     jobs_by_id = {item.file_id: item for item in jobs}
 
-    assert set(jobs_by_id) == {"id-a", "id-b", "id-d", "id-e", "id-g", "id-h", "id-i"}
+    assert set(jobs_by_id) == {"id-a", "id-b", "id-d", "id-e", "id-g", "id-h", "id-i", "id-v"}
     assert jobs_by_id["id-a"].trigger == "file_state_new"
     assert jobs_by_id["id-b"].trigger == "file_state_changed"
     assert jobs_by_id["id-d"].trigger == "missing_thumbnail_row"
@@ -99,6 +103,8 @@ def test_select_thumbnail_jobs_incremental_rules(tmp_path: Path) -> None:
     assert jobs_by_id["id-g"].trigger == "thumbnail_file_missing"
     assert jobs_by_id["id-h"].trigger == "out_dir_changed"
     assert jobs_by_id["id-i"].trigger == "missing_dimensions"
+    assert jobs_by_id["id-v"].trigger == "file_state_changed"
+    assert jobs_by_id["id-v"].media_type == "video"
 
 
 def test_thumbnail_db_upsert_and_source_loading(tmp_path: Path) -> None:
@@ -109,15 +115,16 @@ def test_thumbnail_db_upsert_and_source_loading(tmp_path: Path) -> None:
     with duckdb.connect(str(db_path)) as conn:
         conn.execute(
             """
-            INSERT INTO file_metadata (file_id, path, is_supported, file_state, extract_status)
+            INSERT INTO file_metadata (file_id, path, media_type, is_supported, file_state, extract_status)
             VALUES
-                ('file-1', '/photos/a.jpg', TRUE, 'new', 'success'),
-                ('file-2', '/photos/b.jpg', TRUE, 'missing', 'missing')
+                ('file-1', '/photos/a.jpg', 'image', TRUE, 'new', 'success'),
+                ('file-2', '/photos/b.jpg', 'image', TRUE, 'missing', 'missing'),
+                ('file-3', '/photos/c.mp4', 'video', TRUE, 'new', 'success')
             """
         )
 
     sources = store.load_thumbnail_sources()
-    assert [item.file_id for item in sources] == ["file-1"]
+    assert [item.file_id for item in sources] == ["file-1", "file-3"]
 
     now = datetime(2026, 3, 30, tzinfo=timezone.utc)
     store.upsert_thumbnail_records(
@@ -165,8 +172,9 @@ def test_cleanup_stale_thumbnails_removes_rows_and_files(tmp_path: Path) -> None
 
     active_thumb = out_dir / "aa" / "active.jpg"
     stale_thumb = out_dir / "bb" / "stale.jpg"
+    video_thumb = out_dir / "cc" / "video.jpg"
     outside_thumb = tmp_path / "outside.jpg"
-    for item in (active_thumb, stale_thumb, outside_thumb):
+    for item in (active_thumb, stale_thumb, video_thumb, outside_thumb):
         item.parent.mkdir(parents=True, exist_ok=True)
         item.write_bytes(b"x")
 
@@ -177,8 +185,10 @@ def test_cleanup_stale_thumbnails_removes_rows_and_files(tmp_path: Path) -> None
     with duckdb.connect(str(db_path)) as conn:
         conn.execute(
             """
-            INSERT INTO file_metadata (file_id, path, is_supported, file_state, extract_status)
-            VALUES ('active-1', '/photos/active.jpg', TRUE, 'unchanged', 'success')
+            INSERT INTO file_metadata (file_id, path, media_type, is_supported, file_state, extract_status)
+            VALUES
+                ('active-1', '/photos/active.jpg', 'image', TRUE, 'unchanged', 'success'),
+                ('video-1', '/photos/video.mp4', 'video', TRUE, 'unchanged', 'success')
             """
         )
 
@@ -211,6 +221,15 @@ def test_cleanup_stale_thumbnails_removes_rows_and_files(tmp_path: Path) -> None
                 error=None,
                 generated_at=now,
             ),
+            ThumbnailRecord(
+                file_id="video-1",
+                thumb_path=str(video_thumb),
+                width=100,
+                height=80,
+                status="success",
+                error=None,
+                generated_at=now,
+            ),
         ]
     )
 
@@ -224,7 +243,90 @@ def test_cleanup_stale_thumbnails_removes_rows_and_files(tmp_path: Path) -> None
     assert file_delete_errors == 0
     assert active_thumb.exists()
     assert not stale_thumb.exists()
+    assert video_thumb.exists()
     assert outside_thumb.exists()
 
     remaining = store.load_thumbnails_by_file_id()
-    assert set(remaining.keys()) == {"active-1"}
+    assert set(remaining.keys()) == {"active-1", "video-1"}
+
+
+class _DummyCompletedProcess:
+    def __init__(self, returncode: int, stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = ""
+
+
+def test_generate_video_thumbnail_requires_ffmpeg(tmp_path: Path) -> None:
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"video")
+    target = tmp_path / "thumb.jpg"
+
+    try:
+        generate_video_thumbnail(
+            source_path=source,
+            thumb_path=target,
+            max_size=512,
+            ffmpeg_available=False,
+        )
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "ffmpeg_not_found" in str(exc)
+
+
+def test_generate_video_thumbnail_success_path(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "clip.mp4"
+    source.write_bytes(b"video")
+    target = tmp_path / "thumb.jpg"
+
+    def _fake_run(command, capture_output, text, check):  # noqa: ANN001
+        output_path = Path(command[-1])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with Image.new("RGB", (320, 180), color=(255, 0, 0)) as generated:
+            generated.save(output_path, format="JPEG")
+        return _DummyCompletedProcess(returncode=0)
+
+    monkeypatch.setattr("photo_archive.thumbnail_pipeline.subprocess.run", _fake_run)
+
+    width, height = generate_video_thumbnail(
+        source_path=source,
+        thumb_path=target,
+        max_size=512,
+        ffmpeg_available=True,
+    )
+
+    assert (width, height) == (320, 180)
+    assert target.exists()
+
+
+def test_generate_thumbnail_image_falls_back_to_ffmpeg(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "image.heic"
+    source.write_bytes(b"not-a-real-heic")
+    target = tmp_path / "thumb.jpg"
+
+    calls = {"video": 0}
+
+    def _fake_image_thumbnail(*, source_path, thumb_path, max_size):  # noqa: ANN001
+        raise UnidentifiedImageError(f"cannot identify image file {source_path}")
+
+    def _fake_video_thumbnail(*, source_path, thumb_path, max_size, ffmpeg_available):  # noqa: ANN001
+        calls["video"] += 1
+        thumb_path.parent.mkdir(parents=True, exist_ok=True)
+        with Image.new("RGB", (256, 144), color=(0, 0, 255)) as generated:
+            generated.save(thumb_path, format="JPEG")
+        return 256, 144
+
+    monkeypatch.setattr("photo_archive.thumbnail_pipeline.generate_image_thumbnail", _fake_image_thumbnail)
+    monkeypatch.setattr("photo_archive.thumbnail_pipeline.generate_video_thumbnail", _fake_video_thumbnail)
+
+    width, height = generate_thumbnail(
+        source_path=source,
+        thumb_path=target,
+        max_size=512,
+        media_type="image",
+        ffmpeg_available=True,
+    )
+
+    assert calls["video"] == 1
+    assert (width, height) == (256, 144)
+    assert target.exists()

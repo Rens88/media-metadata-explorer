@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
+import subprocess
 from time import perf_counter
 
 from photo_archive.database import DuckDBStore
@@ -10,10 +12,11 @@ from photo_archive.models import ThumbnailJob, ThumbnailRecord, ThumbnailSourceR
 from photo_archive.progress import ProgressPrinter
 
 try:
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageOps, UnidentifiedImageError
 except ImportError:  # pragma: no cover - exercised through runtime error path
     Image = None
     ImageOps = None
+    UnidentifiedImageError = OSError
 
 
 @dataclass(slots=True)
@@ -59,7 +62,13 @@ def run_thumbnail_pipeline(
         existing_by_file_id=existing_by_file_id,
         out_dir=resolved_out_dir,
     )
-    supported_source_count = sum(1 for item in source_records if item.is_supported)
+    ffmpeg_available = shutil.which("ffmpeg") is not None
+    eligible_media_types = {"image", "video"}
+    supported_source_count = sum(
+        1
+        for item in source_records
+        if item.is_supported and (item.media_type or "image").lower() in eligible_media_types
+    )
     skipped_count = max(0, supported_source_count - len(jobs))
     state_duration_seconds = progress_printer.done(
         "STATE",
@@ -109,6 +118,8 @@ def run_thumbnail_pipeline(
                 source_path=Path(job.source_path),
                 thumb_path=Path(job.thumb_path),
                 max_size=max_size,
+                media_type=job.media_type,
+                ffmpeg_available=ffmpeg_available,
             )
             generated_count += 1
         except Exception as exc:  # noqa: BLE001 - per-file isolation
@@ -184,8 +195,12 @@ def select_thumbnail_jobs(
     out_dir: Path,
 ) -> list[ThumbnailJob]:
     jobs: list[ThumbnailJob] = []
+    eligible_media_types = {"image", "video"}
     for source in source_records:
         if not source.is_supported:
+            continue
+        source_media_type = (source.media_type or "image").lower()
+        if source_media_type not in eligible_media_types:
             continue
 
         expected_thumb_path = thumbnail_path_for_file_id(source.file_id, out_dir)
@@ -203,6 +218,7 @@ def select_thumbnail_jobs(
                 file_id=source.file_id,
                 source_path=source.path,
                 thumb_path=str(expected_thumb_path),
+                media_type=source_media_type,
                 trigger=trigger,
             )
         )
@@ -214,7 +230,46 @@ def thumbnail_path_for_file_id(file_id: str, out_dir: Path) -> Path:
     return out_dir / shard / f"{file_id}.jpg"
 
 
-def generate_thumbnail(*, source_path: Path, thumb_path: Path, max_size: int) -> tuple[int, int]:
+def generate_thumbnail(
+    *,
+    source_path: Path,
+    thumb_path: Path,
+    max_size: int,
+    media_type: str,
+    ffmpeg_available: bool,
+) -> tuple[int, int]:
+    media_type_value = media_type.lower().strip()
+    if media_type_value == "video":
+        return generate_video_thumbnail(
+            source_path=source_path,
+            thumb_path=thumb_path,
+            max_size=max_size,
+            ffmpeg_available=ffmpeg_available,
+        )
+    if media_type_value != "image":
+        raise RuntimeError(f"unsupported_thumbnail_media_type: {media_type_value or 'unknown'}")
+    try:
+        return generate_image_thumbnail(
+            source_path=source_path,
+            thumb_path=thumb_path,
+            max_size=max_size,
+        )
+    except Exception as exc:  # noqa: BLE001 - controlled fallback decision
+        if _should_fallback_to_ffmpeg_image(
+            source_path=source_path,
+            error=exc,
+            ffmpeg_available=ffmpeg_available,
+        ):
+            return generate_video_thumbnail(
+                source_path=source_path,
+                thumb_path=thumb_path,
+                max_size=max_size,
+                ffmpeg_available=ffmpeg_available,
+            )
+        raise
+
+
+def generate_image_thumbnail(*, source_path: Path, thumb_path: Path, max_size: int) -> tuple[int, int]:
     if Image is None or ImageOps is None:
         raise RuntimeError("pillow_not_installed")
     if not source_path.exists():
@@ -231,6 +286,56 @@ def generate_thumbnail(*, source_path: Path, thumb_path: Path, max_size: int) ->
         width, height = image.size
         image.save(thumb_path, format="JPEG", quality=85, optimize=True)
         return width, height
+
+
+def generate_video_thumbnail(
+    *,
+    source_path: Path,
+    thumb_path: Path,
+    max_size: int,
+    ffmpeg_available: bool,
+) -> tuple[int, int]:
+    if not ffmpeg_available:
+        raise RuntimeError("ffmpeg_not_found")
+    if not source_path.exists():
+        raise FileNotFoundError(f"source file not found: {source_path}")
+
+    thumb_path.parent.mkdir(parents=True, exist_ok=True)
+    scale_filter = (
+        f"scale='if(gt(iw,ih),{max_size},-2)':'if(gt(iw,ih),-2,{max_size})'"
+    )
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source_path),
+        "-vf",
+        scale_filter,
+        "-frames:v",
+        "1",
+        str(thumb_path),
+    ]
+    process = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        stderr = (process.stderr or "").strip()
+        message = stderr or "no_stderr"
+        raise RuntimeError(f"ffmpeg_failed_rc_{process.returncode}: {message}")
+    if not thumb_path.exists():
+        raise RuntimeError("ffmpeg_missing_output_file")
+
+    if Image is None:
+        raise RuntimeError("pillow_not_installed")
+    with Image.open(thumb_path) as image:
+        width, height = image.size
+    return int(width), int(height)
 
 
 def format_thumbnail_summary(summary: dict[str, int | float]) -> str:
@@ -313,6 +418,34 @@ def _lanczos_resampling() -> int:
     if hasattr(Image, "Resampling"):
         return int(Image.Resampling.LANCZOS)
     return int(Image.LANCZOS)
+
+
+def _should_fallback_to_ffmpeg_image(
+    *,
+    source_path: Path,
+    error: Exception,
+    ffmpeg_available: bool,
+) -> bool:
+    if not ffmpeg_available:
+        return False
+    if isinstance(error, FileNotFoundError):
+        return False
+    if not source_path.exists():
+        return False
+
+    extension = source_path.suffix.lower()
+    if extension in {".heic", ".heif", ".avif"}:
+        return True
+    if isinstance(error, UnidentifiedImageError):
+        return True
+    if isinstance(error, OSError):
+        message = str(error).lower()
+        return (
+            "cannot identify image file" in message
+            or "truncated file" in message
+            or "cannot load this image" in message
+        )
+    return False
 
 
 def _format_duration(seconds: float) -> str:

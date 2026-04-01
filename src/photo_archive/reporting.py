@@ -7,10 +7,12 @@ from typing import Any, Sequence
 from photo_archive.models import (
     ColumnCoverageRecord,
     ExtensionCountRecord,
+    FailedVideoFrameRecord,
     FailedThumbnailRecord,
     FailedFileRecord,
     NormalizedRecord,
     ScanHistoryRecord,
+    VideoFrameStatusCountRecord,
     ThumbnailStatusCountRecord,
 )
 
@@ -40,6 +42,9 @@ def build_run_summary(
     video_extraction_attempted: int = 0,
     video_extraction_successful: int = 0,
     video_extraction_failed: int = 0,
+    hash_attempted: int = 0,
+    hash_successful: int = 0,
+    hash_failed: int = 0,
 ) -> dict[str, Any]:
     files_discovered = len(records)
     supported_records = [record for record in records if record.is_supported]
@@ -102,6 +107,9 @@ def build_run_summary(
         "video_extraction_attempted": video_extraction_attempted,
         "video_extraction_successful": video_extraction_successful,
         "video_extraction_failed": video_extraction_failed,
+        "hash_attempted": hash_attempted,
+        "hash_successful": hash_successful,
+        "hash_failed": hash_failed,
     }
 
 
@@ -152,6 +160,12 @@ def format_run_summary(summary: dict[str, Any]) -> str:
             f"attempted={summary.get('video_extraction_attempted', 0)}, "
             f"successful={summary.get('video_extraction_successful', 0)}, "
             f"failed={summary.get('video_extraction_failed', 0)}"
+        )
+        lines.append(
+            "Hashing this run: "
+            f"attempted={summary.get('hash_attempted', 0)}, "
+            f"successful={summary.get('hash_successful', 0)}, "
+            f"failed={summary.get('hash_failed', 0)}"
         )
         if summary.get("full_rescan"):
             lines.append("Rescan mode: full_rescan")
@@ -216,9 +230,13 @@ def format_cli_report(
     failed_limit: int,
     thumbnail_statuses: list[ThumbnailStatusCountRecord] | None = None,
     failed_thumbnails: list[FailedThumbnailRecord] | None = None,
+    video_frame_statuses: list[VideoFrameStatusCountRecord] | None = None,
+    failed_video_frames: list[FailedVideoFrameRecord] | None = None,
 ) -> str:
     thumbnail_statuses = thumbnail_statuses or []
     failed_thumbnails = failed_thumbnails or []
+    video_frame_statuses = video_frame_statuses or []
+    failed_video_frames = failed_video_frames or []
     lines: list[str] = []
     lines.append("Latest scan summary")
     lines.append(f"  scan_id: {scan.scan_id}")
@@ -266,6 +284,12 @@ def format_cli_report(
         f" successful={scan.video_extraction_successful},"
         f" failed={scan.video_extraction_failed}"
     )
+    lines.append(
+        "  hash:"
+        f" attempted={scan.hash_attempted},"
+        f" successful={scan.hash_successful},"
+        f" failed={scan.hash_failed}"
+    )
     lines.append("")
 
     lines.append(f"Failed files (up to {failed_limit})")
@@ -295,6 +319,28 @@ def format_cli_report(
             error_text = item.error or "unknown_error"
             path_text = item.thumb_path or "[no_thumb_path]"
             lines.append(f"  [{item.status}] {item.file_id} | {path_text} | {error_text}")
+    lines.append("")
+
+    lines.append("Video frame stats")
+    if not video_frame_statuses:
+        lines.append("  no video frame rows")
+    else:
+        total_frames = sum(item.count for item in video_frame_statuses)
+        lines.append(f"  total_rows: {total_frames}")
+        for item in video_frame_statuses:
+            lines.append(f"  {item.status}: {item.count}")
+    lines.append("")
+
+    lines.append(f"Failed video frames (up to {failed_limit})")
+    if not failed_video_frames:
+        lines.append("  none")
+    else:
+        for item in failed_video_frames:
+            error_text = item.error or "unknown_error"
+            frame_path = item.frame_path or "[no_frame_path]"
+            lines.append(
+                f"  [{item.status}] {item.file_id}#{item.frame_index} | {frame_path} | {error_text}"
+            )
     lines.append("")
 
     lines.append(f"Non-null coverage by column (rows={coverage_total_rows})")

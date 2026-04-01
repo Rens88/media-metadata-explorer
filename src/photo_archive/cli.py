@@ -4,10 +4,12 @@ import argparse
 import logging
 from pathlib import Path
 
+from photo_archive.backup_audit import format_backup_audit_summary, run_backup_audit
 from photo_archive.database import DuckDBStore
 from photo_archive.pipeline import run_pipeline
 from photo_archive.progress import ProgressPrinter
 from photo_archive.reporting import format_cli_report, format_run_summary
+from photo_archive.frame_pipeline import format_video_frame_summary, run_video_frame_pipeline
 from photo_archive.thumbnail_pipeline import format_thumbnail_summary, run_thumbnail_pipeline
 
 
@@ -125,6 +127,69 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable structured progress prints during thumbnail generation",
     )
+
+    frames_parser = subparsers.add_parser(
+        "frames",
+        help="Generate sampled video frames from indexed videos",
+    )
+    frames_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=Path("data/db/photo_archive.duckdb"),
+        help="DuckDB file path",
+    )
+    frames_parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=Path("data/frames"),
+        help="Video frame output directory",
+    )
+    frames_parser.add_argument(
+        "--interval-sec",
+        type=float,
+        default=10.0,
+        help="Sampling interval in seconds between extracted frames",
+    )
+    frames_parser.add_argument(
+        "--log-level",
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity",
+    )
+    frames_parser.add_argument(
+        "--quiet-progress",
+        action="store_true",
+        help="Disable structured progress prints during frame generation",
+    )
+
+    backup_audit_parser = subparsers.add_parser(
+        "backup-audit",
+        help="Compare primary and backup scan roots and list primary files missing in backup",
+    )
+    backup_audit_parser.add_argument(
+        "--db-path",
+        type=Path,
+        default=Path("data/db/photo_archive.duckdb"),
+        help="DuckDB file path",
+    )
+    backup_audit_parser.add_argument(
+        "--primary-root",
+        type=Path,
+        required=True,
+        help="Primary scan root to audit",
+    )
+    backup_audit_parser.add_argument(
+        "--backup-root",
+        type=Path,
+        required=True,
+        help="Backup scan root to compare against",
+    )
+    backup_audit_parser.add_argument(
+        "--limit",
+        type=int,
+        default=200,
+        help="Maximum missing files to show",
+    )
     return parser
 
 
@@ -147,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
         failed_files = store.get_failed_files(scan.scan_id, limit=max(1, int(args.failed_limit)))
         thumbnail_statuses = store.get_thumbnail_status_counts()
         failed_thumbnails = store.get_failed_thumbnails(limit=max(1, int(args.failed_limit)))
+        video_frame_statuses = store.get_video_frame_status_counts()
+        failed_video_frames = store.get_failed_video_frames(limit=max(1, int(args.failed_limit)))
         coverage_total_rows, coverage_rows = store.get_column_non_null_coverage(
             scan.scan_id,
             sort_order=args.coverage_sort,
@@ -161,6 +228,8 @@ def main(argv: list[str] | None = None) -> int:
                 failed_limit=max(1, int(args.failed_limit)),
                 thumbnail_statuses=thumbnail_statuses,
                 failed_thumbnails=failed_thumbnails,
+                video_frame_statuses=video_frame_statuses,
+                failed_video_frames=failed_video_frames,
             )
         )
         return 0
@@ -179,6 +248,62 @@ def main(argv: list[str] | None = None) -> int:
         print(format_thumbnail_summary(result.summary))
         print(f"DuckDB path: {result.db_path}")
         print(f"Thumbnail output dir: {result.out_dir}")
+        return 0
+
+    if args.command == "frames":
+        logging.basicConfig(
+            level=getattr(logging, args.log_level),
+            format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+        )
+        result = run_video_frame_pipeline(
+            db_path=args.db_path,
+            out_dir=args.out_dir,
+            interval_sec=max(0.1, float(args.interval_sec)),
+            progress=ProgressPrinter(enabled=not args.quiet_progress),
+        )
+        print(format_video_frame_summary(result.summary))
+        print(f"DuckDB path: {result.db_path}")
+        print(f"Frame output dir: {result.out_dir}")
+        return 0
+
+    if args.command == "backup-audit":
+        store = DuckDBStore(db_path=args.db_path)
+        store.initialize()
+        primary_root = args.primary_root.expanduser().resolve()
+        backup_root = args.backup_root.expanduser().resolve()
+        primary_scan_id = store.get_latest_scan_id_for_root(str(primary_root))
+        if primary_scan_id is None:
+            print(f"No scan history found for primary root: {primary_root}")
+            return 1
+        backup_scan_id = store.get_latest_scan_id_for_root(str(backup_root))
+        if backup_scan_id is None:
+            print(f"No scan history found for backup root: {backup_root}")
+            return 1
+
+        primary_files = store.load_active_files_for_scan(
+            scan_id=primary_scan_id,
+            scan_root=str(primary_root),
+        )
+        backup_files = store.load_active_files_for_scan(
+            scan_id=backup_scan_id,
+            scan_root=str(backup_root),
+        )
+        result = run_backup_audit(
+            primary_scan_id=primary_scan_id,
+            backup_scan_id=backup_scan_id,
+            primary_root=primary_root,
+            backup_root=backup_root,
+            primary_files=primary_files,
+            backup_files=backup_files,
+            limit=max(1, int(args.limit)),
+        )
+        print(
+            format_backup_audit_summary(
+                result,
+                primary_root=primary_root,
+                backup_root=backup_root,
+            )
+        )
         return 0
 
     logging.basicConfig(

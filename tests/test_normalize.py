@@ -156,3 +156,79 @@ def test_video_metadata_fields_from_ffprobe_payload() -> None:
     assert normalized.video_fps is not None
     assert round(normalized.video_fps, 3) == 29.97
     assert normalized.captured_at_source == "ffprobe:creation_time"
+
+
+def test_gps_prefers_consistent_priority_pair() -> None:
+    scan_record = _build_scan_record()
+    extraction = ExtractionResult(
+        path=scan_record.path,
+        status="success",
+        raw_metadata={
+            "EXIF:GPSLatitude": 52.123,
+            "EXIF:GPSLongitude": 5.456,
+            "Composite:GPSLatitude": 52.000,
+            "Composite:GPSLongitude": 5.000,
+        },
+    )
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        FilenameParseRecord(),
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
+
+    assert normalized.gps_lat == 52.0
+    assert normalized.gps_lon == 5.0
+
+
+def test_gps_discards_zero_zero_coordinates() -> None:
+    scan_record = _build_scan_record()
+    extraction = ExtractionResult(
+        path=scan_record.path,
+        status="success",
+        raw_metadata={
+            "EXIF:GPSLatitude": 0.0,
+            "EXIF:GPSLongitude": 0.0,
+        },
+    )
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        FilenameParseRecord(),
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
+
+    assert normalized.gps_lat is None
+    assert normalized.gps_lon is None
+
+
+def test_gps_prefers_non_zero_pair_when_composite_contains_zero_component() -> None:
+    scan_record = _build_scan_record()
+    extraction = ExtractionResult(
+        path=scan_record.path,
+        status="success",
+        raw_metadata={
+            "Composite:GPSLatitude": 0.0,
+            "Composite:GPSLongitude": 5.121,
+            "EXIF:GPSLatitude": 52.0907,
+            "EXIF:GPSLongitude": 5.1214,
+        },
+    )
+    normalized = normalize_record(
+        scan_record,
+        extraction,
+        FilenameParseRecord(),
+        scan_id="scan_1",
+        file_state="new",
+        first_seen_at=scan_record.scan_time,
+        last_seen_at=scan_record.scan_time,
+    )
+
+    assert normalized.gps_lat == 52.0907
+    assert normalized.gps_lon == 5.1214

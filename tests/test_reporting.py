@@ -3,10 +3,12 @@ from datetime import datetime, timezone
 from photo_archive.models import (
     ColumnCoverageRecord,
     ExtensionCountRecord,
+    FailedVideoFrameRecord,
     FailedThumbnailRecord,
     FailedFileRecord,
     NormalizedRecord,
     ScanHistoryRecord,
+    VideoFrameStatusCountRecord,
     ThumbnailStatusCountRecord,
 )
 from photo_archive.reporting import build_run_summary, format_cli_report, format_run_summary
@@ -84,6 +86,7 @@ def test_summary_contains_comparison_line() -> None:
     assert "extract_attempted=0/2" in text
     assert "Image extraction this run:" in text
     assert "Video extraction this run:" in text
+    assert "Hashing this run:" in text
 
 
 def test_format_cli_report_sections() -> None:
@@ -141,6 +144,19 @@ def test_format_cli_report_sections() -> None:
             error="corrupt_image",
         )
     ]
+    video_frame_statuses = [
+        VideoFrameStatusCountRecord(status="success", count=45),
+        VideoFrameStatusCountRecord(status="failed", count=3),
+    ]
+    failed_video_frames = [
+        FailedVideoFrameRecord(
+            file_id="video-1",
+            frame_index=2,
+            frame_path="/frames/video-1_f00002.jpg",
+            status="failed",
+            error="ffmpeg_failed_rc_1",
+        )
+    ]
 
     text = format_cli_report(
         scan=scan,
@@ -151,6 +167,8 @@ def test_format_cli_report_sections() -> None:
         failed_limit=50,
         thumbnail_statuses=thumbnail_statuses,
         failed_thumbnails=failed_thumbnails,
+        video_frame_statuses=video_frame_statuses,
+        failed_video_frames=failed_video_frames,
     )
     assert "Latest scan summary" in text
     assert "unsupported_files: 10" in text
@@ -159,9 +177,14 @@ def test_format_cli_report_sections() -> None:
     assert "Media extraction stats" in text
     assert "image: attempted=5, successful=5, failed=0" in text
     assert "video: attempted=2, successful=2, failed=0" in text
+    assert "hash: attempted=0, successful=0, failed=0" in text
     assert "Failed files (up to 50)" in text
     assert "Thumbnail stats" in text
     assert "total_rows: 124" in text
     assert "Failed thumbnails (up to 50)" in text
     assert "corrupt_image" in text
+    assert "Video frame stats" in text
+    assert "total_rows: 48" in text
+    assert "Failed video frames (up to 50)" in text
+    assert "video-1#2" in text
     assert "camera_model: 70/90" in text

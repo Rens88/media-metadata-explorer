@@ -18,6 +18,7 @@ Local-first ingestion and metadata extraction for large personal media collectio
 * supported media type detection (images + common videos)
 * filesystem metadata collection
 * embedded metadata extraction via ExifTool (images) and ffprobe (videos)
+* incremental content hashing (`sha256`) for duplicate/backup comparison foundations
 * basic filename datetime parsing
 * normalization into a stable flat schema
 * persistence in DuckDB
@@ -66,6 +67,7 @@ This project is:
 * Python 3.11+
 * ExifTool available on `PATH`
 * ffprobe (from FFmpeg) available on `PATH` for video metadata extraction
+* ffmpeg available on `PATH` for video thumbnail generation
 * Pillow (installed via project dependencies) for thumbnail generation
 
 Install ExifTool:
@@ -99,6 +101,7 @@ python -m photo_archive.cli scan /path/to/root \
 ```
 
 By default, scans are **incremental**: only `new` and `changed` files are sent to metadata extractors (ExifTool for images, ffprobe for videos). Unchanged files reuse previously stored metadata.
+The same `new`/`changed` subset is used for content hashing so reruns stay fast.
 
 The CLI now prints structured progress lines with timestamp, topic, purpose, expectation, and stage duration.
 Final output also includes a `Comparison line` with mode, duration, extraction-attempt ratio, and `new+changed` count to compare incremental vs full-rescan runs.
@@ -136,6 +139,7 @@ The report command prints:
 - image/video extraction stats
 - failed files list
 - thumbnail status counts and failed thumbnail list
+- video frame status counts and failed video frame list
 - non-null coverage by column
 
 Optional flags:
@@ -147,6 +151,18 @@ python -m photo_archive.cli report \
   --failed-limit 100 \
   --coverage-sort asc
 ```
+
+### Backup audit (primary vs backup root)
+
+```bash
+python -m photo_archive.cli backup-audit \
+  --db-path data/db/photo_archive.duckdb \
+  --primary-root /path/to/primary \
+  --backup-root /path/to/backup \
+  --limit 200
+```
+
+This compares files from the latest scan of each root and reports files present in primary but missing in backup.
 
 ### Custom extensions
 
@@ -166,10 +182,29 @@ python -m photo_archive.cli thumbs \
 
 Thumbnail generation is incremental:
 
+- generates thumbnails for supported `image` and `video` media rows
+- image thumbnails use Pillow; video thumbnails use `ffmpeg` frame extraction
 - always generates for files marked `new` or `changed`
 - regenerates if a thumbnail row/file is missing or previous status was failed
 - skips unchanged files with an existing successful thumbnail
 - cleans stale thumbnail rows/files for media now marked missing
+
+### Generate sampled video frames
+
+```bash
+python -m photo_archive.cli frames \
+  --db-path data/db/photo_archive.duckdb \
+  --out-dir data/frames \
+  --interval-sec 10
+```
+
+Frame sampling is incremental:
+
+- targets indexed videos only
+- samples one frame every `--interval-sec` seconds (starting at 0s)
+- always regenerates for `new`/`changed` videos
+- regenerates missing/failed frame rows for unchanged videos
+- cleans stale frame rows/files for videos marked missing
 
 ## Tiny Streamlit Explorer
 
@@ -227,7 +262,8 @@ Raw metadata is preserved as JSON to allow future enrichment without reprocessin
 * Python
 * DuckDB (local analytical database)
 * ExifTool (metadata extraction)
-* ffprobe (video metadata, future phase)
+* ffprobe (video metadata extraction)
+* ffmpeg (video thumbnails + frame sampling)
 * Pandas / Polars (data processing)
 * Pillow (thumbnail generation)
 

@@ -11,6 +11,7 @@ from photo_archive.database import DuckDBStore
 from photo_archive.extractors.exiftool_extractor import ExifToolExtractor
 from photo_archive.extractors.ffprobe_extractor import FFprobeExtractor
 from photo_archive.extractors.filename_parser import parse_filename_datetime
+from photo_archive.hash_utils import hash_file_sha256
 from photo_archive.incremental import classify_incremental_state
 from photo_archive.models import (
     ExistingFileIndexRecord,
@@ -124,6 +125,46 @@ def run_pipeline(
     extraction_attempted = len(candidate_supported_records)
 
     progress_printer.start(
+        topic="HASH",
+        purpose="compute content hashes for new/changed supported files",
+        expectation="per-file hash failures should not fail the run",
+        details=f"candidate_files={extraction_attempted}",
+    )
+    hash_by_path: dict[str, tuple[str | None, str, str | None, datetime]] = {}
+    hash_attempted = 0
+    hash_successful = 0
+    hash_failed = 0
+    hash_at = datetime.now(timezone.utc)
+    if not dry_run:
+        for candidate in candidate_supported_records:
+            hash_attempted += 1
+            source_path = Path(candidate.path)
+            try:
+                digest = hash_file_sha256(source_path)
+                hash_by_path[candidate.path] = (digest, "success", None, hash_at)
+                hash_successful += 1
+            except Exception as exc:  # noqa: BLE001 - per-file isolation
+                hash_by_path[candidate.path] = (
+                    None,
+                    "failed",
+                    f"{type(exc).__name__}: {exc}",
+                    hash_at,
+                )
+                hash_failed += 1
+    hash_duration_seconds = progress_printer.done(
+        "HASH",
+        details=(
+            "dry_run=yes"
+            if dry_run
+            else (
+                f"attempted={hash_attempted}, "
+                f"successful={hash_successful}, "
+                f"failed={hash_failed}"
+            )
+        ),
+    )
+
+    progress_printer.start(
         topic="EXTRACT",
         purpose="run ExifTool/ffprobe on target files",
         expectation=(
@@ -162,7 +203,11 @@ def run_pipeline(
         file_state = incremental.state_by_path.get(scan_record.path, "new")
         existing_record = existing_by_path.get(scan_record.path)
 
-        if file_state == "unchanged" and existing_record is not None:
+        if _should_reuse_existing_record(
+            file_state=file_state,
+            existing_record=existing_record,
+            full_rescan=full_rescan,
+        ):
             normalized_records.append(
                 _normalized_from_existing(
                     scan_record=scan_record,
@@ -175,11 +220,32 @@ def run_pipeline(
 
         parse_record = filename_parse_by_path.get(scan_record.path, FilenameParseRecord())
         extraction = extraction_by_path.get(scan_record.path)
+        should_extract = scan_record.is_supported and _should_extract(
+            scan_record.path,
+            incremental.state_by_path,
+            full_rescan,
+        )
 
-        if dry_run and scan_record.is_supported and _should_extract(
-            scan_record.path, incremental.state_by_path, full_rescan
-        ):
+        if dry_run and should_extract:
             extraction = ExtractionResult(path=scan_record.path, status="skipped_dry_run")
+
+        content_sha256: str | None = None
+        hash_status: str | None = None
+        hash_error: str | None = None
+        hash_recorded_at: datetime | None = None
+        hash_result = hash_by_path.get(scan_record.path)
+        if should_extract:
+            if dry_run:
+                hash_status = "skipped_dry_run"
+            elif hash_result is not None:
+                content_sha256 = hash_result[0]
+                hash_status = hash_result[1]
+                hash_error = hash_result[2]
+                hash_recorded_at = hash_result[3]
+            else:
+                hash_status = "failed"
+                hash_error = "missing_hash_result"
+                hash_recorded_at = hash_at
 
         first_seen_at = (
             existing_record.first_seen_at if existing_record and existing_record.first_seen_at else scan_time
@@ -193,6 +259,10 @@ def run_pipeline(
                 file_state=file_state,
                 first_seen_at=first_seen_at,
                 last_seen_at=scan_time,
+                content_sha256=content_sha256,
+                hash_status=hash_status,
+                hash_error=hash_error,
+                hash_at=hash_recorded_at,
             )
         )
     normalize_duration_seconds = progress_printer.done(
@@ -205,8 +275,12 @@ def run_pipeline(
         purpose="write db state and optional export",
         expectation="persist latest rows + scan history",
     )
-    upsert_records = [record for record in normalized_records if record.file_state in {"new", "changed"}]
-    unchanged_paths = [record.path for record in normalized_records if record.file_state == "unchanged"]
+    upsert_records, unchanged_scan_records = _select_persist_targets(
+        normalized_records=normalized_records,
+        scan_records=scan_records,
+        state_by_path=incremental.state_by_path,
+        full_rescan=full_rescan,
+    )
     persist_upserted = 0
     persist_touched = 0
     if not dry_run:
@@ -216,7 +290,7 @@ def run_pipeline(
             scan_root=scan_root,
             scan_id=scan_id,
             scan_time=scan_time,
-            paths=unchanged_paths,
+            records=unchanged_scan_records,
         )
         store.mark_missing_files(
             scan_root=scan_root,
@@ -296,10 +370,14 @@ def run_pipeline(
         video_extraction_attempted=video_extraction_attempted,
         video_extraction_successful=video_extraction_successful,
         video_extraction_failed=video_extraction_failed,
+        hash_attempted=hash_attempted,
+        hash_successful=hash_successful,
+        hash_failed=hash_failed,
     )
     finished_at = datetime.now(timezone.utc)
     run_duration_seconds = perf_counter() - run_started_clock
     summary["run_duration_seconds"] = run_duration_seconds
+    summary["hash_duration_seconds"] = hash_duration_seconds
 
     if not dry_run:
         history = ScanHistoryRecord(
@@ -323,6 +401,9 @@ def run_pipeline(
             video_extraction_attempted=summary.get("video_extraction_attempted", 0),
             video_extraction_successful=summary.get("video_extraction_successful", 0),
             video_extraction_failed=summary.get("video_extraction_failed", 0),
+            hash_attempted=summary.get("hash_attempted", 0),
+            hash_successful=summary.get("hash_successful", 0),
+            hash_failed=summary.get("hash_failed", 0),
         )
         store.insert_scan_history(history)
 
@@ -395,4 +476,39 @@ def _normalized_from_existing(
         parsed_datetime=None,
         parsed_pattern=None,
         parse_confidence=None,
+        content_sha256=existing_record.content_sha256,
+        hash_status=existing_record.hash_status,
+        hash_error=existing_record.hash_error,
+        hash_at=existing_record.hash_at,
     )
+
+
+def _should_reuse_existing_record(
+    *,
+    file_state: str,
+    existing_record: ExistingFileIndexRecord | None,
+    full_rescan: bool,
+) -> bool:
+    if full_rescan:
+        return False
+    return file_state == "unchanged" and existing_record is not None
+
+
+def _select_persist_targets(
+    *,
+    normalized_records: list[NormalizedRecord],
+    scan_records: list[FileScanRecord],
+    state_by_path: dict[str, str],
+    full_rescan: bool,
+) -> tuple[list[NormalizedRecord], list[FileScanRecord]]:
+    if full_rescan:
+        upsert_records = [record for record in normalized_records if record.file_state != "missing"]
+        return upsert_records, []
+
+    upsert_records = [record for record in normalized_records if record.file_state in {"new", "changed"}]
+    unchanged_scan_records = [
+        scan_record
+        for scan_record in scan_records
+        if state_by_path.get(scan_record.path) == "unchanged"
+    ]
+    return upsert_records, unchanged_scan_records

@@ -78,6 +78,10 @@ class NormalizedRecord:
     video_codec: str | None = None
     video_fps: float | None = None
     video_bitrate: int | None = None
+    content_sha256: str | None = None
+    hash_status: str | None = None
+    hash_error: str | None = None
+    hash_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -97,6 +101,10 @@ class ExistingFileIndexRecord:
     gps_lat: float | None
     gps_lon: float | None
     camera_model: str | None
+    content_sha256: str | None = None
+    hash_status: str | None = None
+    hash_error: str | None = None
+    hash_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -121,6 +129,9 @@ class ScanHistoryRecord:
     video_extraction_attempted: int = 0
     video_extraction_successful: int = 0
     video_extraction_failed: int = 0
+    hash_attempted: int = 0
+    hash_successful: int = 0
+    hash_failed: int = 0
 
 
 @dataclass(slots=True)
@@ -171,6 +182,7 @@ class MediaExtractionStatRecord:
 class ThumbnailSourceRecord:
     file_id: str
     path: str
+    media_type: str | None
     file_state: str | None
     is_supported: bool
     extract_status: str | None
@@ -192,4 +204,62 @@ class ThumbnailJob:
     file_id: str
     source_path: str
     thumb_path: str
+    media_type: str
     trigger: str
+
+
+@dataclass(slots=True)
+class VideoFrameSourceRecord:
+    file_id: str
+    path: str
+    media_type: str | None
+    file_state: str | None
+    is_supported: bool
+    extract_status: str | None
+    video_duration_seconds: float | None
+
+
+@dataclass(slots=True)
+class VideoFrameRecord:
+    file_id: str
+    frame_index: int
+    frame_time_sec: float
+    frame_path: str | None
+    width: int | None
+    height: int | None
+    status: str
+    error: str | None
+    generated_at: datetime
+
+
+@dataclass(slots=True)
+class VideoFrameJob:
+    file_id: str
+    source_path: str
+    frame_index: int
+    frame_time_sec: float
+    frame_path: str
+    trigger: str
+
+
+@dataclass(slots=True)
+class VideoFrameStatusCountRecord:
+    status: str
+    count: int
+
+
+@dataclass(slots=True)
+class FailedVideoFrameRecord:
+    file_id: str
+    frame_index: int
+    frame_path: str | None
+    status: str
+    error: str | None
+
+
+@dataclass(slots=True)
+class BackupAuditFileRecord:
+    file_id: str
+    path: str
+    size_bytes: int | None
+    content_sha256: str | None

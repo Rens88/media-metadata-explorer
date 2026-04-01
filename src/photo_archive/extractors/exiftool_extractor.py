@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -72,6 +73,13 @@ class ExifToolExtractor:
             error = "exiftool_timeout"
             return self._batch_failure(batch, error, stderr="process timed out")
         except OSError as exc:
+            if len(batch) > 1 and _is_command_too_long_error(exc):
+                midpoint = max(1, len(batch) // 2)
+                left_results = self._extract_batch(batch[:midpoint])
+                right_results = self._extract_batch(batch[midpoint:])
+                combined = dict(left_results)
+                combined.update(right_results)
+                return combined
             error = f"exiftool_exec_failed: {exc}"
             return self._batch_failure(batch, error)
 
@@ -150,3 +158,14 @@ def _decode_subprocess_bytes(value: bytes | None) -> str:
         return value.decode("utf-8")
     except UnicodeDecodeError:
         return value.decode("utf-8", errors="replace")
+
+
+def _is_command_too_long_error(error: OSError) -> bool:
+    winerror = getattr(error, "winerror", None)
+    if winerror == 206:
+        return True
+    errno_value = getattr(error, "errno", None)
+    if errno_value == getattr(os, "E2BIG", 7):
+        return True
+    message = str(error).lower()
+    return "filename or extension is too long" in message or "argument list too long" in message

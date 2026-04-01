@@ -79,6 +79,20 @@ This phase should not try to solve everything. It should establish a dependable 
 - duplicate detection
 - similarity search
 - face clustering and optional person labeling
+- backup gap detection and copy-to-backup workflow
+
+### Additional functional requirements (post-Phase 1)
+- Detect suspected duplicates and near-duplicates using practical local heuristics.
+- Detect "selection" intent from folder names and preserve it as filterable metadata.
+  - Examples to treat as selection-like folders: `selection`, `selections`, `selected`, `favorites`, and case variants.
+  - If a media file path includes one of these folders, store a boolean/label flag so users can filter for these items.
+- Support scanning a secondary backup location.
+  - Compare primary-root files against backup-root files.
+  - Highlight files present in primary root but missing in backup root.
+  - Backup root may contain additional files not in primary root; these should not be treated as missing.
+- Add a local-first backup command to copy missing files from primary root to backup root.
+  - The copy operation should be incremental and idempotent.
+  - Report copied/skipped/failed counts and per-file errors.
 
 ---
 

@@ -46,9 +46,14 @@ def normalize_record(
     file_state: str,
     first_seen_at: datetime | None,
     last_seen_at: datetime | None,
+    content_sha256: str | None = None,
+    hash_status: str | None = None,
+    hash_error: str | None = None,
+    hash_at: datetime | None = None,
 ) -> NormalizedRecord:
     raw_metadata = extraction.raw_metadata if extraction and extraction.raw_metadata else {}
     video_stream = _first_video_stream(raw_metadata) if scan_record.media_type == "video" else None
+    gps_lat, gps_lon = _extract_best_gps(raw_metadata)
 
     captured_at, captured_at_source = choose_best_timestamp(
         raw_metadata=raw_metadata,
@@ -75,8 +80,8 @@ def normalize_record(
         is_supported=scan_record.is_supported,
         captured_at=captured_at,
         captured_at_source=captured_at_source,
-        gps_lat=_extract_float(raw_metadata, GPS_LAT_TAGS),
-        gps_lon=_extract_float(raw_metadata, GPS_LON_TAGS),
+        gps_lat=gps_lat,
+        gps_lon=gps_lon,
         gps_alt=_extract_float(raw_metadata, GPS_ALT_TAGS),
         camera_make=_extract_string(raw_metadata, MAKE_TAGS),
         camera_model=_extract_string(raw_metadata, MODEL_TAGS),
@@ -106,6 +111,10 @@ def normalize_record(
         video_codec=_extract_video_codec(video_stream),
         video_fps=_extract_video_fps(video_stream),
         video_bitrate=_extract_video_bitrate(raw_metadata, video_stream),
+        content_sha256=content_sha256,
+        hash_status=hash_status,
+        hash_error=hash_error,
+        hash_at=hash_at,
     )
 
 
@@ -197,6 +206,76 @@ def _extract_float(raw_metadata: dict[str, Any], candidate_tags: list[str]) -> f
     value, _ = _extract_value_with_source(raw_metadata, candidate_tags)
     if value is None:
         return None
+
+
+def _extract_best_gps(raw_metadata: dict[str, Any]) -> tuple[float | None, float | None]:
+    # Keep lat/lon from the same namespace (e.g., Composite/EXIF/XMP)
+    # to avoid mixing mismatched values from different tag groups.
+    by_prefix: dict[str, dict[str, Any]] = {}
+    for key, value in raw_metadata.items():
+        key_text = str(key)
+        key_lower = key_text.lower()
+        if ":" in key_text:
+            prefix = key_lower.rsplit(":", 1)[0]
+            suffix = key_lower.rsplit(":", 1)[1]
+        else:
+            prefix = ""
+            suffix = key_lower
+        if suffix == "gpslatitude":
+            by_prefix.setdefault(prefix, {})["lat"] = value
+        elif suffix == "gpslongitude":
+            by_prefix.setdefault(prefix, {})["lon"] = value
+
+    if not by_prefix:
+        return None, None
+
+    prefix_priority = {"composite": 0, "exif": 1, "xmp": 2, "": 3}
+    ordered_prefixes = sorted(
+        by_prefix.keys(),
+        key=lambda item: (prefix_priority.get(item, 99), item),
+    )
+
+    candidates: list[tuple[bool, float, float]] = []
+    for prefix in ordered_prefixes:
+        bucket = by_prefix[prefix]
+        if "lat" not in bucket or "lon" not in bucket:
+            continue
+        lat = _coerce_float(bucket["lat"])
+        lon = _coerce_float(bucket["lon"])
+        if not _is_valid_gps_pair(lat, lon):
+            continue
+        assert lat is not None and lon is not None
+        has_zero_component = abs(lat) < 1e-9 or abs(lon) < 1e-9
+        candidates.append((has_zero_component, lat, lon))
+
+    if not candidates:
+        return None, None
+
+    for has_zero_component, lat, lon in candidates:
+        if not has_zero_component:
+            return lat, lon
+    return candidates[0][1], candidates[0][2]
+
+
+def _coerce_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_valid_gps_pair(lat: float | None, lon: float | None) -> bool:
+    if lat is None or lon is None:
+        return False
+    if not (-90.0 <= lat <= 90.0):
+        return False
+    if not (-180.0 <= lon <= 180.0):
+        return False
+    if abs(lat) < 1e-9 and abs(lon) < 1e-9:
+        return False
+    return True
     try:
         return float(value)
     except (TypeError, ValueError):
